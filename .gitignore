@@ -1,0 +1,13 @@
+target/
+.idea/
+*.iml
+.classpath
+.project
+.settings/
+.vscode/
+.env
+uploads/
+*.log
+.tools/
+deploy/nginx/certs/*
+!deploy/nginx/certs/.gitkeep

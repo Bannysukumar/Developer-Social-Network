@@ -1,0 +1,9 @@
+target
+.git
+.idea
+.tools
+uploads
+*.md
+.env
+.github
+deploy/nginx/certs

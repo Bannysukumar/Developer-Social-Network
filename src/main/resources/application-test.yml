@@ -1,0 +1,32 @@
+spring:
+  data:
+    mongodb:
+      uri: ${MONGODB_URI:mongodb://localhost:27017/socialnetwork-test}
+
+logging:
+  level:
+    root: WARN
+    com.trivexa.socialnetwork: INFO
+    org.springframework.security: WARN
+
+app:
+  websocket:
+    container-limits: false
+  jwt:
+    secret: test-only-secret-key-must-be-32-bytes-min
+    access-token-ttl: 15m
+    refresh-token-ttl: 7d
+  password:
+    memory-kb: 8192
+    iterations: 1
+    parallelism: 1
+  rate-limit:
+    enabled: false
+    store: memory
+  security:
+    trust-proxy: false
+    require-email-verified: false
+    max-request-bytes: 1048576
+  mail:
+    host: ""
+    public-app-url: http://localhost:3000

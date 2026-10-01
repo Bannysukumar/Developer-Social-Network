@@ -1,0 +1,16 @@
+spring:
+  data:
+    mongodb:
+      uri: ${MONGODB_URI:mongodb://social:social_dev_password@localhost:27017/socialnetwork?authSource=admin}
+
+logging:
+  level:
+    root: INFO
+    com.trivexa.socialnetwork: INFO
+    org.springframework.security: WARN
+    org.springframework.data.mongodb.core: WARN
+
+app:
+  password:
+    memory-kb: 16384
+    iterations: 2
