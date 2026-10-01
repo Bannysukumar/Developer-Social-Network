@@ -55,7 +55,8 @@ public class SecurityConfig {
                     headers.contentTypeOptions(org.springframework.security.config.Customizer.withDefaults());
                     headers.frameOptions(frame -> frame.deny());
                     headers.referrerPolicy(referrer -> referrer.policy(ReferrerPolicyHeaderWriter.ReferrerPolicy.NO_REFERRER));
-                    headers.contentSecurityPolicy(csp -> csp.policyDirectives("default-src 'none'; frame-ancestors 'none'"));
+                    headers.addHeaderWriter((request, response) -> response.setHeader(
+                            "Content-Security-Policy", contentSecurityPolicy(request.getRequestURI())));
                     if (production) {
                         headers.httpStrictTransportSecurity(hsts -> hsts.includeSubDomains(true).maxAgeInSeconds(31_536_000));
                     }
@@ -75,6 +76,17 @@ public class SecurityConfig {
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)
                 .addFilterAfter(rateLimitFilter, JwtAuthenticationFilter.class);
         return http.build();
+    }
+
+    private static String contentSecurityPolicy(String path) {
+        boolean documentation = "/swagger-ui.html".equals(path)
+                || path.startsWith("/swagger-ui/")
+                || path.startsWith("/v3/api-docs");
+        if (documentation) {
+            return "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+                    + "img-src 'self' data:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'";
+        }
+        return "default-src 'none'; frame-ancestors 'none'";
     }
 
     @Bean
