@@ -1,4 +1,4 @@
-# Trivexa Social Network Backend
+# DevConnect Social Network Backend
 
 Independent REST and WebSocket API for a social network. Clients such as a VS Code extension, a React web app, or a future mobile app talk to this service over HTTPS. The server never stores message plaintext or private encryption keys.
 

@@ -2,7 +2,7 @@
 
 ## Application
 
-The service is a Spring Boot process in `com.trivexa.socialnetwork`.
+The service is a Spring Boot process in `com.devconnect.socialnetwork`.
 
 - `controller` maps `/api/v1` HTTP requests and returns `ApiResponse`.
 - `service` applies business rules, privacy, and state transitions.

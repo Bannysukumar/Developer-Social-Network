@@ -6,7 +6,7 @@ spring:
 logging:
   level:
     root: WARN
-    com.trivexa.socialnetwork: INFO
+    com.devconnect.socialnetwork: INFO
     org.springframework.security: WARN
 
 app:
