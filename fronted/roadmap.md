@@ -1,0 +1,8 @@
+- [x] Phase 2: isolated VS Code extension foundation and available checks.
+- [x] Phase 3: centralized REST foundation, verified contract types, normalized errors, and mocked transport tests.
+- [x] Phase 4: authentication, SecretStorage session, Account Webview bridge, explicit `allowInsecureHttp`.
+- [x] Phase 5: discover search, friends/requests/block, profile update, notifications against live API contract.
+- [x] Phase 6: conversations + opaque ciphertext message relay (not E2EE).
+- [x] Automated extension checks: typecheck, lint, unit tests, bundle.
+- [ ] Optional hardening: HTTPS termination in front of the API, WebSocket live delivery, verified client E2EE.
+- [ ] Marketplace publisher ID + signed release (only when requested).

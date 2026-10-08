@@ -1,0 +1,92 @@
+{
+  "name": "devconnect-vscode-extension",
+  "displayName": "DevConnect",
+  "description": "A developer community inside Visual Studio Code.",
+  "publisher": "Bannysukumar2255",
+  "version": "0.4.1",
+  "private": true,
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onView:devconnect.home",
+    "onCommand:devconnect.open"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "devconnect",
+          "title": "DevConnect",
+          "icon": "assets/devconnect.svg"
+        }
+      ]
+    },
+    "views": {
+      "devconnect": [
+        {
+          "type": "webview",
+          "id": "devconnect.home",
+          "name": "Home"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "devconnect.open",
+        "title": "DevConnect: Open"
+      }
+    ],
+    "configuration": {
+      "title": "DevConnect",
+      "properties": {
+        "devconnect.apiBaseUrl": {
+          "type": "string",
+          "default": "http://185.216.203.209/api/v1",
+          "description": "DevConnect REST API base URL. Must end in /api/v1. HTTPS is required unless the host is localhost or allowInsecureHttp is enabled."
+        },
+        "devconnect.allowInsecureHttp": {
+          "type": "boolean",
+          "default": true,
+          "description": "Allow a remote http:// API base URL. Disable this when a verified HTTPS endpoint is available."
+        },
+        "devconnect.requestTimeoutMs": {
+          "type": "number",
+          "default": 15000,
+          "minimum": 1,
+          "maximum": 60000,
+          "description": "Maximum time in milliseconds to wait for an API response."
+        }
+      }
+    }
+  },
+  "main": "./dist/extension.js",
+  "scripts": {
+    "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
+    "build": "npm run clean && esbuild src/extension/extension.ts --bundle --platform=node --format=cjs --target=node18 --external:vscode --outfile=dist/extension.js",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "eslint src test",
+    "test": "bun test",
+    "check": "npm run typecheck && npm run lint && npm run test && npm run build",
+    "package": "npm run build && vsce package --no-dependencies --allow-missing-repository"
+  },
+  "dependencies": {
+    "ws": "^8.22.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.32.0",
+    "@types/node": "^22.16.5",
+    "@types/vscode": "^1.85.0",
+    "@types/ws": "^8.18.2",
+    "@vscode/vsce": "^3.6.0",
+    "esbuild": "^0.25.5",
+    "eslint": "^9.32.0",
+    "globals": "^15.15.0",
+    "typescript": "^5.8.3",
+    "typescript-eslint": "^8.56.1"
+  }
+}

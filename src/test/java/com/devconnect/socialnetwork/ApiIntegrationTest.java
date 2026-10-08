@@ -344,10 +344,13 @@ class ApiIntegrationTest extends AbstractIntegrationTest {
     void keyDirectoryStoresOnlyPublicMaterial() throws Exception {
         Session ada = signup("ada", "ada@example.com", "Ada Lovelace");
         Session grace = signup("grace", "grace@example.com", "Grace Hopper");
-        String publicKey = Base64.getEncoder().encodeToString(new byte[32]);
-        String signature = Base64.getEncoder().encodeToString(new byte[64]);
+        var identity = com.devconnect.socialnetwork.crypto.Ed25519Signatures.generateIdentity();
+        String publicKey = identity.publicKey();
+        String preKey = com.devconnect.socialnetwork.crypto.Ed25519Signatures.randomPublicKey();
+        String oneTime = com.devconnect.socialnetwork.crypto.Ed25519Signatures.randomPublicKey();
+        String signature = com.devconnect.socialnetwork.crypto.Ed25519Signatures.sign(identity.privateKey(), preKey);
 
-        MvcResult identity = mockMvc.perform(post("/api/v1/keys/identity")
+        MvcResult identityResult = mockMvc.perform(post("/api/v1/keys/identity")
                         .header("Authorization", "Bearer " + ada.accessToken())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
@@ -355,14 +358,14 @@ class ApiIntegrationTest extends AbstractIntegrationTest {
                                 """.formatted(publicKey)))
                 .andExpect(status().isOk())
                 .andReturn();
-        String deviceId = objectMapper.readTree(identity.getResponse().getContentAsString()).path("data").path("id").asText();
+        String deviceId = objectMapper.readTree(identityResult.getResponse().getContentAsString()).path("data").path("id").asText();
 
         mockMvc.perform(post("/api/v1/keys/prekeys")
                         .header("Authorization", "Bearer " + ada.accessToken())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"deviceId":"%s","signedPreKey":{"preKeyId":1,"publicKey":"%s","signature":"%s"},"oneTimePreKeys":[{"preKeyId":2,"publicKey":"%s"}]}
-                                """.formatted(deviceId, publicKey, signature, publicKey)))
+                                """.formatted(deviceId, preKey, signature, oneTime)))
                 .andExpect(status().isOk());
 
         mockMvc.perform(get("/api/v1/keys/" + ada.userId()).header("Authorization", "Bearer " + grace.accessToken()))

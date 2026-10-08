@@ -22,7 +22,7 @@ TLS protects tokens and ciphertext in transit. It does not make the server unabl
 
 The server does not generate message keys, does not accept a private key field, and does not log ciphertext or key material.
 
-Signature bytes are length-checked and stored. They are not verified. Signal signed-prekey verification uses the client's identity key and a specific signature scheme. Verifying with an unrelated algorithm would reject valid bundles or create a false sense of assurance. The receiving client must verify signatures before using a bundle.
+For an Ed25519 identity key, a signed prekey is accepted only when its 64-byte signature verifies over the raw 32-byte signed-prekey public key. X25519 identity keys are still length-checked only, because that algorithm does not sign. Clients also verify the signature before encrypting. This is not the Signal protocol.
 
 ## Intended client flow
 

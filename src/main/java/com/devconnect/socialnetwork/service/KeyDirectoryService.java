@@ -1,6 +1,8 @@
 package com.devconnect.socialnetwork.service;
 
+import com.devconnect.socialnetwork.crypto.Ed25519Signatures;
 import com.devconnect.socialnetwork.crypto.PublicKeyMaterial;
+import com.devconnect.socialnetwork.domain.KeyAlgorithm;
 import com.devconnect.socialnetwork.domain.AccountStatus;
 import com.devconnect.socialnetwork.domain.PreKeyType;
 import com.devconnect.socialnetwork.dto.request.PreKeyUploadRequest;
@@ -182,7 +184,13 @@ public class KeyDirectoryService {
         entity.setType(type);
         entity.setPublicKey(PublicKeyMaterial.requirePublicKey(upload.publicKey()));
         if (type == PreKeyType.SIGNED) {
-            entity.setSignature(PublicKeyMaterial.requireSignature(upload.signature()));
+            String signature = PublicKeyMaterial.requireSignature(upload.signature());
+            IdentityKeyEntity identity = identityKeyRepository.findByDeviceId(deviceId)
+                    .orElseThrow(() -> new ValidationFailedException("Register an identity key before uploading a signed prekey"));
+            if (identity.getAlgorithm() == KeyAlgorithm.Ed25519) {
+                Ed25519Signatures.verify(identity.getPublicKey(), entity.getPublicKey(), signature);
+            }
+            entity.setSignature(signature);
         }
         entity.setCreatedAt(clock.instant());
         try {
