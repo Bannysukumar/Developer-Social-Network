@@ -11,6 +11,7 @@ import type {
 import type { ScreenId } from "../shared/flow";
 import type { HostMessage } from "../shared/protocol";
 import type { DisplayMessage } from "./auth-service";
+import { TYPING_IDLE_MS, typingCommand } from "./typing-debounce";
 
 export interface HostState {
   readonly phase: "checking" | "ready";
@@ -528,6 +529,8 @@ export function renderWebview(webview: Webview, state: HostState): string {
   let heldNew = 0;
   let typingOn = false;
   let typingStopTimer = 0;
+  const typingCommand = ${typingCommand.toString()};
+  const TYPING_IDLE_MS = ${TYPING_IDLE_MS};
   let settingsPane = "menu";
   let editing = false;
   let dialogAction = null;
@@ -1035,20 +1038,17 @@ export function renderWebview(webview: Webview, state: HostState): string {
     const box = event.target;
     if (send && box instanceof HTMLTextAreaElement) send.disabled = !box.value.trim() || state.busy;
     if (!(box instanceof HTMLTextAreaElement) || !state.activeConversationId) return;
-    if (box.value.trim()) {
-      if (!typingOn) {
-        typingOn = true;
-        vscode.postMessage({ version: 1, type: "typing", conversationId: state.activeConversationId, active: true });
-      }
-      window.clearTimeout(typingStopTimer);
+    const decision = typingCommand(typingOn, box.value);
+    typingOn = decision.typingOn;
+    if (decision.active !== null) {
+      vscode.postMessage({ version: 1, type: "typing", conversationId: state.activeConversationId, active: decision.active });
+    }
+    window.clearTimeout(typingStopTimer);
+    if (decision.armIdle) {
       typingStopTimer = window.setTimeout(() => {
         typingOn = false;
         vscode.postMessage({ version: 1, type: "typing", conversationId: state.activeConversationId, active: false });
-      }, 2500);
-    } else if (typingOn) {
-      typingOn = false;
-      window.clearTimeout(typingStopTimer);
-      vscode.postMessage({ version: 1, type: "typing", conversationId: state.activeConversationId, active: false });
+      }, TYPING_IDLE_MS);
     }
   });
   document.getElementById("chat-filter").addEventListener("input", (event) => {

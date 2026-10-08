@@ -50,6 +50,7 @@ public class PresenceService {
         return thread;
     });
     private final ConcurrentHashMap<String, ScheduledFuture<?>> offlineTimers = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, Object> presenceLocks = new ConcurrentHashMap<>();
 
     public PresenceService(
             WebSocketSessionRegistry registry,
@@ -69,20 +70,24 @@ public class PresenceService {
     }
 
     public void connected(String userId) {
-        cancelOffline(userId);
-        if (registry.openCount(userId) <= 1) {
-            announce(userId, "ONLINE", null);
+        synchronized (lock(userId)) {
+            cancelOffline(userId);
+            if (registry.openCount(userId) <= 1) {
+                announce(userId, "ONLINE", null);
+            }
         }
         sendOnlineFriends(userId);
     }
 
     public void disconnected(String userId) {
-        if (registry.openCount(userId) > 0) {
-            return;
+        synchronized (lock(userId)) {
+            if (registry.openCount(userId) > 0) {
+                return;
+            }
+            cancelOffline(userId);
+            ScheduledFuture<?> pending = scheduler.schedule(() -> markOffline(userId), OFFLINE_GRACE.toSeconds(), TimeUnit.SECONDS);
+            offlineTimers.put(userId, pending);
         }
-        cancelOffline(userId);
-        ScheduledFuture<?> pending = scheduler.schedule(() -> markOffline(userId), OFFLINE_GRACE.toSeconds(), TimeUnit.SECONDS);
-        offlineTimers.put(userId, pending);
     }
 
     public PresenceView visible(String viewerId, UserEntity target, RelationshipView relationship) {
@@ -114,16 +119,28 @@ public class PresenceService {
     }
 
     private void markOffline(String userId) {
-        offlineTimers.remove(userId);
-        if (registry.isOnline(userId)) {
-            return;
+        synchronized (lock(userId)) {
+            offlineTimers.remove(userId);
+            if (registry.isOnline(userId)) {
+                return;
+            }
+            Instant seen = clock.instant();
+            userRepository.findById(userId).ifPresent(user -> {
+                if (registry.isOnline(userId)) {
+                    return;
+                }
+                user.setLastSeenAt(seen);
+                userRepository.save(user);
+            });
+            if (registry.isOnline(userId)) {
+                return;
+            }
+            announce(userId, "OFFLINE", seen);
         }
-        Instant seen = clock.instant();
-        userRepository.findById(userId).ifPresent(user -> {
-            user.setLastSeenAt(seen);
-            userRepository.save(user);
-        });
-        announce(userId, "OFFLINE", seen);
+    }
+
+    private Object lock(String userId) {
+        return presenceLocks.computeIfAbsent(userId, ignored -> new Object());
     }
 
     private void announce(String userId, String status, Instant lastSeenAt) {

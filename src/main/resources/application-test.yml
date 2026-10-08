@@ -14,7 +14,7 @@ app:
     container-limits: false
   jwt:
     secret: test-only-secret-key-must-be-32-bytes-min
-    access-token-ttl: 15m
+    access-token-ttl: 60m
     refresh-token-ttl: 7d
   password:
     memory-kb: 8192

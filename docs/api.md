@@ -165,11 +165,22 @@ Identity registration:
 
 ## WebSocket
 
-`/ws/chat`
+`/ws/chat` is not a REST endpoint. The handshake accepts `Authorization: Bearer <access token>`. The server also accepts `access_token` on the query string; the extension must not put a token in the URL. Frames are `{ "type", "data" }`.
 
-Client frames: `PING`, `SEND`, `DELIVERED`, `READ`.
-
-`SEND` uses the same ciphertext fields as the REST message body plus `conversationId`. Server frames are `READY`, `MESSAGE`, `DELIVERED`, `READ`, `PONG`, `ERROR`, and `NOTIFICATION`. A `NOTIFICATION` frame uses the same object as a notification in `GET /notifications`. There is no presence topic and no typing frame.
+| Event | Direction | Payload | Authentication | Authorization | Example |
+| --- | --- | --- | --- | --- | --- |
+| `PING` | client | none | Bearer on the socket | the signed-in user | `{ "type": "PING" }` |
+| `PONG` | server | empty object | same socket | same user | `{ "type": "PONG", "data": {} }` |
+| `READY` | server | `userId` | same socket | sent once after the socket is registered | `{ "type": "READY", "data": { "userId": "..." } }` |
+| `SEND` | client | ciphertext fields plus `conversationId` | same socket | friends who are not blocked, and a member of the conversation | `{ "type": "SEND", "conversationId": "...", "ciphertext": "..." }` |
+| `MESSAGE` | server | message object | same socket | the sender and the recipient | `{ "type": "MESSAGE", "data": { "id": "...", "status": "SENT" } }` |
+| `DELIVERED` | both | client sends `messageId`; server sends the ack | same socket | only the recipient can acknowledge | `{ "type": "DELIVERED", "messageId": "..." }` |
+| `READ` | both | client sends `messageId`; server sends the ack | same socket | only the recipient can mark that message read | `{ "type": "READ", "messageId": "..." }` |
+| `NOTIFICATION` | server | same object as `GET /notifications` | same socket | the notification recipient | `{ "type": "NOTIFICATION", "data": { "type": "FRIEND_REQUEST" } }` |
+| `PRESENCE_UPDATE` | server | `userId`, `status` (`ONLINE` or `OFFLINE`), optional `lastSeenAt` | same socket | friends, when activity status is on and neither user blocked the other. Offline last seen is not sent to non-friends | `{ "type": "PRESENCE_UPDATE", "data": { "userId": "...", "status": "ONLINE" } }` |
+| `TYPING_START` | both | `conversationId`, and the server adds `userId` | same socket | conversation member, friends, not blocked. Not stored | `{ "type": "TYPING_START", "conversationId": "..." }` |
+| `TYPING_STOP` | both | same as start | same socket | same as start | `{ "type": "TYPING_STOP", "conversationId": "..." }` |
+| `ERROR` | server | `errorCode`, `message` | same socket | the sender of the rejected frame | `{ "type": "ERROR", "data": { "errorCode": "FORBIDDEN" } }` |
 
 ## Health
 
