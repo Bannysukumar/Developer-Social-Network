@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { notificationFromFrame, parseServerFrame } from "../src/extension/chat-socket";
-import { mergeLiveMessage, mergeNotification, retryDelayMs } from "../src/extension/realtime-state";
+import { applyNotificationRead, mergeLiveMessage, mergeNotification, retryDelayMs } from "../src/extension/realtime-state";
 
 const message = {
   id: "m1",
@@ -29,6 +29,15 @@ describe("realtime state", () => {
     expect(again.messages).toBeUndefined();
   });
 
+  test("replaces the sender's pending bubble instead of showing the message twice", () => {
+    const pending = { ...message, id: "local-1", senderId: "ada", sendState: "sending" as const, displayText: "hi" };
+    const delivered = { ...message, id: "server-1", senderId: "ada" };
+    const first = mergeLiveMessage([pending], delivered, "c1", "ada", 0);
+    expect(first.messages?.map((item) => item.id)).toEqual(["server-1"]);
+    const again = mergeLiveMessage(first.messages ?? [], delivered, "c1", "ada", 0);
+    expect(again.messages).toBeUndefined();
+  });
+
   test("counts a message that arrived in another conversation", () => {
     const patch = mergeLiveMessage([], message, null, "ada", 0);
     expect(patch.bumpConversation).toBe("c1");
@@ -49,5 +58,16 @@ describe("realtime state", () => {
     expect(first.unreadNotifications).toBe(1);
     expect(first.refresh).toBe("social");
     expect(mergeNotification(first.notifications ?? [], note, 1, 1).refresh).toBeNull();
+  });
+
+  test("marks one notification read and decreases the shared unread count", () => {
+    const notes = [
+      { id: "n1", read: false, message: "Rahul sent you a message" },
+      { id: "n2", read: false, message: "Rahul sent you a friend request" },
+    ];
+    const next = applyNotificationRead(notes, 2, { ...notes[0], read: true });
+    expect(next.notifications.map((item) => item.read)).toEqual([true, false]);
+    expect(next.unreadCount).toBe(1);
+    expect(applyNotificationRead(next.notifications, next.unreadCount, { ...notes[0], read: true }).unreadCount).toBe(1);
   });
 });

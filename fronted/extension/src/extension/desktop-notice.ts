@@ -17,6 +17,13 @@ export interface NoticeTarget {
   readonly friendsPanel?: "requests";
 }
 
+export function unreadMessageNotificationId(
+  notifications: readonly { id: string; type: string; referenceId?: string | null; read: boolean }[],
+  conversationId: string,
+): string | undefined {
+  return notifications.find((note) => note.type === "NEW_MESSAGE" && !note.read && note.referenceId === conversationId)?.id;
+}
+
 export function decideMessageNotice(
   messageId: string,
   conversationId: string,
@@ -25,6 +32,7 @@ export function decideMessageNotice(
   prefs: NoticePrefs,
   seen: ReadonlySet<string>,
   senderLabel = "Someone",
+  notificationId?: string,
 ): NoticeTarget | null {
   if (senderIsSelf || seen.has(messageId) || !prefs.messages || viewingThisConversation) return null;
   const name = senderLabel.trim() || "Someone";
@@ -34,6 +42,7 @@ export function decideMessageNotice(
     action: "Open message",
     screen: "messages",
     conversationId,
+    notificationId,
   };
 }
 

@@ -6,6 +6,7 @@ const REFRESH_TOKEN_KEY = "devconnect.refreshToken";
 const ACCESS_EXPIRES_KEY = "devconnect.accessTokenExpiresAt";
 const USER_KEY = "devconnect.user";
 const DEVICE_KEYS_KEY = "devconnect.deviceKeys";
+const ROUTE_KEY = "devconnect.lastRoute";
 
 export interface StoredSession {
   readonly accessToken: string;
@@ -63,12 +64,29 @@ export class SessionStore {
     await this.globalState.update(USER_KEY, JSON.stringify(user));
   }
 
+  rememberRoute(screen: string, conversationId: string | null): void {
+    void this.globalState.update(ROUTE_KEY, JSON.stringify({ screen, conversationId }));
+  }
+
+  lastRoute(): { screen: string; conversationId: string | null } | undefined {
+    const raw = this.globalState.get<string>(ROUTE_KEY);
+    if (!raw) return undefined;
+    try {
+      const parsed = JSON.parse(raw) as { screen?: unknown; conversationId?: unknown };
+      if (typeof parsed.screen !== "string") return undefined;
+      return { screen: parsed.screen, conversationId: typeof parsed.conversationId === "string" ? parsed.conversationId : null };
+    } catch {
+      return undefined;
+    }
+  }
+
   async clear(): Promise<void> {
     await Promise.all([
       this.secrets.delete(ACCESS_TOKEN_KEY),
       this.secrets.delete(REFRESH_TOKEN_KEY),
       this.secrets.delete(ACCESS_EXPIRES_KEY),
       this.globalState.update(USER_KEY, undefined),
+      this.globalState.update(ROUTE_KEY, undefined),
     ]);
   }
 

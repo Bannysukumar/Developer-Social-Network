@@ -25,6 +25,15 @@ export class ApiError extends Error {
   }
 }
 
+export function isAuthenticationFailure(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 401;
+}
+
+export function isTransientFailure(error: unknown): boolean {
+  if (!(error instanceof ApiError)) return false;
+  return error.kind === "network" || error.kind === "timeout" || (error.status !== undefined && error.status >= 500);
+}
+
 export function httpError(status: number): ApiError {
   const message = HTTP_MESSAGES[status]
     ?? (status >= 500 ? "The DevConnect service is temporarily unavailable." : "The request could not be completed.");

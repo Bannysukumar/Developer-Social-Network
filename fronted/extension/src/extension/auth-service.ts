@@ -368,13 +368,24 @@ export class AuthService {
   }
 
   async tryRefreshAccessToken(): Promise<string | undefined> {
-    if (this.refreshInFlight) {
-      return this.refreshInFlight;
-    }
-    this.refreshInFlight = this.refreshAccessToken().finally(() => {
-      this.refreshInFlight = undefined;
-    });
-    return this.refreshInFlight;
+    return this.refreshAccessToken();
+  }
+
+  renewAccessToken(): Promise<string | undefined> {
+    return this.refreshAccessToken();
+  }
+
+  rememberRoute(screen: string, conversationId: string | null): void {
+    this.session.rememberRoute(screen, conversationId);
+  }
+
+  lastRoute(): { screen: string; conversationId: string | null } | undefined {
+    return this.session.lastRoute();
+  }
+
+  async invalidateSession(): Promise<void> {
+    await this.session.clear();
+    this.peerNames.clear();
   }
 
   userFacingError(error: unknown): string {
@@ -390,7 +401,14 @@ export class AuthService {
     return "Something went wrong. Try again.";
   }
 
-  displayMessage(message: MessageDto): DisplayMessage {
+  displayMessage(message: MessageDto & Partial<Pick<DisplayMessage, "displayText" | "sendState">>): DisplayMessage {
+    if (message.id.startsWith("local-")) {
+      return {
+        ...message,
+        displayText: message.displayText ?? "",
+        sendState: message.sendState,
+      };
+    }
     return {
       ...message,
       displayText: this.readMessage(message),
@@ -479,7 +497,16 @@ export class AuthService {
     });
   }
 
-  private async refreshAccessToken(): Promise<string | undefined> {
+  private refreshAccessToken(): Promise<string | undefined> {
+    if (!this.refreshInFlight) {
+      this.refreshInFlight = this.performRefresh().finally(() => {
+        this.refreshInFlight = undefined;
+      });
+    }
+    return this.refreshInFlight;
+  }
+
+  private async performRefresh(): Promise<string | undefined> {
     const refreshToken = await this.session.getRefreshToken();
     if (!refreshToken) {
       await this.session.clear();
@@ -520,6 +547,7 @@ export class AuthService {
       fetcher: this.fetcher,
       getAccessToken: () => this.session.getAccessToken(),
       onUnauthorized: () => this.tryRefreshAccessToken(),
+      onSessionRejected: () => this.invalidateSession(),
     });
   }
 }

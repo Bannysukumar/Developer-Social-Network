@@ -66,6 +66,56 @@ describe("central API client", () => {
     ]);
   });
 
+  test("retries a 401 once and does not refresh the refresh call", async () => {
+    let refreshCount = 0;
+    let rejected = 0;
+    const client = new ApiClient(config, {
+      getAccessToken: async () => "access-old",
+      onUnauthorized: async () => {
+        refreshCount += 1;
+        return "access-new";
+      },
+      onSessionRejected: async () => {
+        rejected += 1;
+      },
+      fetcher: async (input) => {
+        if (String(input).endsWith("/auth/refresh")) return jsonResponse({ message: "expired" }, 401);
+        return jsonResponse({ message: "expired" }, 401);
+      },
+    });
+    await expect(client.request("users/me", userSchema)).rejects.toMatchObject({ status: 401 });
+    expect(refreshCount).toBe(1);
+    expect(rejected).toBe(1);
+    refreshCount = 0;
+    await expect(client.request("auth/refresh", undefined, { method: "POST", body: { refreshToken: "opaque" }, skipAuth: true })).rejects.toMatchObject({ status: 401 });
+    expect(refreshCount).toBe(0);
+  });
+
+  test("keeps the session for a server error and a network failure", async () => {
+    let refreshCount = 0;
+    const server = new ApiClient(config, {
+      getAccessToken: async () => "access",
+      onUnauthorized: async () => {
+        refreshCount += 1;
+        return "access-2";
+      },
+      fetcher: async () => jsonResponse({ message: "down" }, 503),
+    });
+    await expect(server.request("users/me", userSchema)).rejects.toMatchObject({ status: 503 });
+    const offline = new ApiClient(config, {
+      getAccessToken: async () => "access",
+      onUnauthorized: async () => {
+        refreshCount += 1;
+        return "access-2";
+      },
+      fetcher: async () => {
+        throw new Error("offline");
+      },
+    });
+    await expect(offline.request("users/me", userSchema)).rejects.toMatchObject({ kind: "network" });
+    expect(refreshCount).toBe(0);
+  });
+
   test("surfaces API error messages without leaking raw secrets from other fields", async () => {
     const client = new ApiClient(config, {
       fetcher: async () => jsonResponse({

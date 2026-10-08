@@ -74,10 +74,17 @@ export type SocketStatus = "offline" | "connecting" | "connected" | "reconnectin
 export interface SocketHandlers {
   onFrame: (frame: ServerFrame) => void;
   onStatus: (status: SocketStatus, recovered: boolean) => void;
+  onAuthLost?: () => void;
 }
 
 export interface ChatSocket {
-  connect(url: string, accessToken: string, handlers: SocketHandlers, refreshToken?: () => Promise<string | undefined>): void;
+  connect(
+    url: string,
+    accessToken: string,
+    handlers: SocketHandlers,
+    refreshToken?: () => Promise<string | undefined>,
+    forceRefresh?: () => Promise<string | undefined>,
+  ): void;
   send(frame: { type: string; conversationId?: string }): void;
   close(): void;
 }
@@ -92,20 +99,27 @@ export class NodeChatSocket implements ChatSocket {
   private url = "";
   private token = "";
   private refreshToken: () => Promise<string | undefined> = async () => this.token;
+  private forceRefresh: () => Promise<string | undefined> = async () => undefined;
   private handlers: SocketHandlers = { onFrame: () => undefined, onStatus: () => undefined };
+  private authFailures = 0;
+  private authRejected = false;
 
   connect(
     url: string,
     accessToken: string,
     handlers: SocketHandlers,
     refreshToken?: () => Promise<string | undefined>,
+    forceRefresh?: () => Promise<string | undefined>,
   ): void {
     this.stopSocket();
     this.stopped = false;
     this.attempt = 0;
+    this.authFailures = 0;
+    this.authRejected = false;
     this.url = url;
     this.token = accessToken;
     this.refreshToken = refreshToken ?? (async () => this.token);
+    this.forceRefresh = forceRefresh ?? refreshToken ?? (async () => undefined);
     this.handlers = handlers;
     this.open(false);
   }
@@ -129,7 +143,11 @@ export class NodeChatSocket implements ChatSocket {
     this.handlers.onStatus(retry ? "reconnecting" : "connecting", false);
     void this.refreshToken().then((token) => {
       if (this.stopped) return;
-      if (token) this.token = token;
+      if (!token) {
+        this.loseAuth();
+        return;
+      }
+      this.token = token;
       this.openSocket(retry);
     }).catch(() => {
       if (!this.stopped) this.schedule();
@@ -147,6 +165,7 @@ export class NodeChatSocket implements ChatSocket {
       if (this.socket !== socket) return;
       const recovered = this.attempt > 0;
       this.attempt = 0;
+      this.authFailures = 0;
       this.handlers.onStatus("connected", recovered);
       socket.send(JSON.stringify({ type: "PING" }));
       this.heartbeat = setInterval(() => {
@@ -159,14 +178,42 @@ export class NodeChatSocket implements ChatSocket {
       const frame = parseServerFrame(data.toString());
       if (frame) this.handlers.onFrame(frame);
     });
+    socket.on("unexpected-response", (_request, response) => {
+      if (response.statusCode === 401) this.authRejected = true;
+    });
     socket.on("close", () => {
       if (this.socket !== socket || this.stopped) return;
       this.socket = undefined;
-      this.schedule();
+      if (!this.authRejected) {
+        this.schedule();
+        return;
+      }
+      this.authRejected = false;
+      this.authFailures += 1;
+      if (this.authFailures > 1) {
+        this.loseAuth();
+        return;
+      }
+      void this.forceRefresh().then((token) => {
+        if (this.stopped) return;
+        if (!token) {
+          this.loseAuth();
+          return;
+        }
+        this.token = token;
+        this.openSocket(true);
+      }).catch(() => this.loseAuth());
     });
     socket.on("error", () => {
       socket.close();
     });
+  }
+
+  private loseAuth(): void {
+    this.stopped = true;
+    this.stopSocket();
+    this.handlers.onStatus("offline", false);
+    this.handlers.onAuthLost?.();
   }
 
   private schedule(): void {

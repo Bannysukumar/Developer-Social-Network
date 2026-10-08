@@ -11,6 +11,7 @@ import type {
 import type { ScreenId } from "../shared/flow";
 import type { HostMessage } from "../shared/protocol";
 import type { DisplayMessage } from "./auth-service";
+import { chatActivity } from "./presence-state";
 import { TYPING_IDLE_MS, typingCommand } from "./typing-debounce";
 
 export interface HostState {
@@ -121,6 +122,7 @@ export function renderWebview(webview: Webview, state: HostState): string {
     <style nonce="${nonce}">
       :root { color-scheme: light dark; --dc-gap: 8px; --dc-radius: 8px; }
       * { box-sizing: border-box; }
+  html, body { height: 100%; }
   body { margin: 0; color: var(--vscode-foreground); background: var(--vscode-sideBar-background); font-family: var(--vscode-font-family); font-size: 13px; }
   button, input, textarea, select { font: inherit; color: inherit; }
   button { cursor: pointer; }
@@ -132,8 +134,8 @@ export function renderWebview(webview: Webview, state: HostState): string {
     .btn.primary, .nav-btn[aria-current="page"] { background: Highlight; color: HighlightText; }
     .banner.error { color: CanvasText; }
   }
-  .app { min-height: 100vh; container-type: inline-size; }
-  .shell { min-height: 100vh; display: flex; }
+  .app { height: 100%; min-height: 100%; container-type: inline-size; }
+  .shell { height: 100%; min-height: 100%; display: flex; }
   .side { width: 168px; flex: none; display: flex; flex-direction: column; gap: 8px; padding: 12px 8px; border-right: 1px solid var(--vscode-panel-border); background: var(--vscode-sideBar-background); }
   .brand-row { display: flex; align-items: center; gap: 8px; padding: 0 8px 8px; }
   .mark { width: 22px; height: 22px; display: grid; place-items: center; color: var(--vscode-foreground); flex: none; }
@@ -147,7 +149,7 @@ export function renderWebview(webview: Webview, state: HostState): string {
   .side-gap { height: 8px; }
   .side-user { margin-top: auto; display: flex; align-items: center; gap: 8px; padding: 8px; min-width: 0; }
   .side-user strong, .side-user span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .stage { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--vscode-editor-background); }
+  .stage { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--vscode-editor-background); }
   .top { display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 8px 12px; }
   .back, .btn { min-height: 28px; border: 1px solid var(--vscode-panel-border); border-radius: 6px; background: transparent; padding: 0 10px; }
   .btn.primary { border-color: transparent; background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
@@ -159,8 +161,8 @@ export function renderWebview(webview: Webview, state: HostState): string {
   .avatar.lg, .avatar-img.lg { width: 72px; height: 72px; font-size: 24px; }
   .file-btn { position: relative; overflow: hidden; display: inline-flex; align-items: center; }
   .file-btn input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
-  main { padding: 4px 16px 20px; display: flex; flex-direction: column; gap: 12px; flex: 1; min-height: 0; }
-  section[data-screen="messages"]:not([hidden]) { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  main { padding: 4px 16px 20px; display: flex; flex-direction: column; gap: 12px; flex: 1; min-height: 0; overflow: auto; }
+  section[data-screen="messages"]:not([hidden]) { flex: 1; min-height: 0; display: flex; flex-direction: column; justify-content: flex-start; overflow: hidden; }
   h1 { margin: 0; font-size: 18px; font-weight: 640; letter-spacing: -0.01em; }
   h2 { margin: 4px 0 0; font-size: 13px; font-weight: 640; }
   p { margin: 0; }
@@ -170,9 +172,9 @@ export function renderWebview(webview: Webview, state: HostState): string {
   label { display: grid; gap: 4px; font-size: 12px; color: var(--vscode-descriptionForeground); }
   input, textarea, select { width: 100%; min-height: 32px; padding: 6px 8px; border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)); border-radius: 6px; background: var(--vscode-input-background); color: var(--vscode-input-foreground); }
   textarea { min-height: 72px; resize: vertical; }
-  .search-field { position: relative; }
-  .search-field .ico { position: absolute; left: 10px; top: 8px; color: var(--vscode-descriptionForeground); }
-  .search-field input { padding-left: 32px; }
+  .search-field { position: relative; display: block; }
+  .search-field .ico { position: absolute; left: 10px; top: 50%; width: 16px; height: 16px; margin-top: -8px; pointer-events: none; color: var(--vscode-descriptionForeground); }
+  .search-field input { padding-left: 34px; }
   .card, .user-row, .setting-row { display: flex; gap: 10px; align-items: center; padding: 8px; border-radius: var(--dc-radius); }
   .user-row { width: 100%; text-align: left; background: transparent; border: 0; color: inherit; }
   .user-row:hover, .note:hover, .setting-row:hover { background: var(--vscode-list-hoverBackground); }
@@ -181,8 +183,8 @@ export function renderWebview(webview: Webview, state: HostState): string {
   .banner { padding: 8px 10px; border-radius: 6px; font-size: 12px; }
   .banner.error { color: var(--vscode-errorForeground); background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent); }
   .banner.notice { background: color-mix(in srgb, var(--vscode-focusBorder) 14%, transparent); }
-  .msg { max-width: 82%; padding: 8px 10px; border-radius: 10px; background: color-mix(in srgb, var(--vscode-foreground) 8%, transparent); white-space: pre-wrap; word-break: break-word; }
-  .msg.mine { margin-left: auto; background: color-mix(in srgb, var(--vscode-button-background) 28%, transparent); }
+  .msg { max-width: 78%; align-self: flex-start; padding: 8px 10px; border-radius: 10px; background: color-mix(in srgb, var(--vscode-foreground) 8%, transparent); white-space: pre-wrap; word-break: break-word; }
+  .msg.mine { align-self: flex-end; margin-left: 0; background: color-mix(in srgb, var(--vscode-button-background) 28%, transparent); }
   .profile-head { display: grid; justify-items: center; text-align: center; gap: 4px; padding: 8px 0 4px; }
   .stats { display: flex; gap: 16px; justify-content: center; }
   .stats div { display: grid; justify-items: center; }
@@ -205,22 +207,26 @@ export function renderWebview(webview: Webview, state: HostState): string {
   .note.unread { background: color-mix(in srgb, var(--vscode-list-inactiveSelectionBackground, var(--vscode-list-hoverBackground)) 80%, transparent); }
   .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--vscode-activityBarBadge-background, var(--vscode-badge-background)); }
   .presence { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 4px; vertical-align: 1px; background: var(--vscode-disabledForeground); }
-  .presence[data-state="online"] { background: var(--vscode-testing-iconPassed, var(--vscode-charts-green, var(--vscode-focusBorder))); }
+    .presence[data-state="online"] { background: var(--vscode-testing-iconPassed, var(--vscode-charts-green, var(--vscode-focusBorder))); }
+    @media (forced-colors: active) {
+      .presence { border: 1px solid CanvasText; }
+      .presence[data-state="online"] { background: Highlight; }
+    }
   .typing i { display: inline-block; width: 4px; height: 4px; margin-right: 3px; border-radius: 50%; background: var(--vscode-descriptionForeground); }
-  .thread-head { display: flex; align-items: center; gap: 8px; }
-  .thread-person { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; }
+  .thread-head { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; min-height: 28px; }
+  .thread-person { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 0 0 auto; }
   .thread-person strong, .thread-person span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .icon-btn { width: 28px; min-width: 28px; padding: 0; }
-  #thread { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; }
-  .composer { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: end; position: sticky; bottom: 0; padding: 8px 0; background: var(--vscode-editor-background); }
+  #thread { flex: 1; min-height: 0; height: 100%; display: flex; flex-direction: column; justify-content: flex-start; gap: 8px; }
+  .composer { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: end; flex: 0 0 auto; position: sticky; bottom: 0; padding: 8px 0; background: var(--vscode-editor-background); }
   .composer textarea { min-height: 36px; max-height: 120px; }
   .send-btn { width: 32px; min-height: 32px; border-radius: 16px; padding: 0; }
-  .chat-empty { display: grid; justify-items: center; text-align: center; gap: 6px; padding: 32px 12px; }
+  .chat-empty { display: grid; justify-items: start; text-align: left; gap: 6px; align-self: stretch; padding: 8px 0; }
   .msg-meta { margin-top: 4px; font-size: 11px; color: var(--vscode-descriptionForeground); }
   .msg.failed { outline: 1px solid var(--vscode-errorForeground); }
   .toast { position: sticky; bottom: 8px; margin: 8px 12px; padding: 8px 10px; border-radius: 8px; background: var(--vscode-notifications-background, var(--vscode-editorWidget-background)); color: var(--vscode-notifications-foreground, var(--vscode-foreground)); border: 1px solid var(--vscode-notifications-border, var(--vscode-panel-border)); }
   .status { margin-left: auto; font-size: 11px; color: var(--vscode-descriptionForeground); }
-  #message-list { flex: 1; min-height: 120px; overflow: auto; display: flex; flex-direction: column; gap: 8px; padding: 4px 0; }
+  #message-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; justify-content: flex-start; align-items: flex-start; gap: 8px; padding: 4px 0; }
   .empty { display: grid; gap: 6px; padding: 20px 4px; }
   .skel { height: 12px; border-radius: 4px; background: color-mix(in srgb, var(--vscode-descriptionForeground) 22%, transparent); }
   .skel-row { height: 44px; border-radius: 8px; background: color-mix(in srgb, var(--vscode-descriptionForeground) 12%, transparent); }
@@ -341,9 +347,11 @@ export function renderWebview(webview: Webview, state: HostState): string {
       <h1>Search</h1>
       <p class="muted">Find people in your developer network.</p>
       <form id="search-form">
-        <label class="search-field">Search developers
-          <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" d="M10.5 18a7.5 7.5 0 1 1 0-15 7.5 7.5 0 0 1 0 15Zm5.2-2.3 4.3 4.3"/></svg>
-          <input id="search-query" name="query" maxlength="80" placeholder="Username or name">
+        <label>Search developers
+          <span class="search-field">
+            <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" d="M10.5 18a7.5 7.5 0 1 1 0-15 7.5 7.5 0 0 1 0 15Zm5.2-2.3 4.3 4.3"/></svg>
+            <input id="search-query" name="query" maxlength="80" placeholder="Username or name">
+          </span>
         </label>
       </form>
       <div id="search-status" class="stack" hidden>
@@ -495,7 +503,7 @@ export function renderWebview(webview: Webview, state: HostState): string {
         <button class="btn quiet" type="button" data-settings="menu">Settings</button>
         <h1>About</h1>
         <p>DevConnect</p>
-        <p class="muted" id="about-version">Version 0.4.10</p>
+        <p class="muted" id="about-version">Version 0.4.17</p>
         <p class="muted">A developer network inside Visual Studio Code. Messages stay encrypted on your devices.</p>
       </div>
     </section>
@@ -520,6 +528,9 @@ export function renderWebview(webview: Webview, state: HostState): string {
   let state = ${initialState};
   let toastSeq = -1;
   let toastTimer = 0;
+  let noticeTimer = 0;
+  let shownNotice = "";
+  let dismissedNotice = "";
   let searchTimer = 0;
   let friendTab = "friends";
   let seenPanelSeq = -1;
@@ -531,6 +542,7 @@ export function renderWebview(webview: Webview, state: HostState): string {
   let typingStopTimer = 0;
   const typingCommand = ${typingCommand.toString()};
   const TYPING_IDLE_MS = ${TYPING_IDLE_MS};
+  const chatActivity = ${chatActivity.toString()};
   let settingsPane = "menu";
   let editing = false;
   let dialogAction = null;
@@ -626,7 +638,10 @@ export function renderWebview(webview: Webview, state: HostState): string {
   }
   function apply(next) {
     state = next;
-    const visible = state.phase === "checking" ? "splash" : state.screen;
+    const protectedScreens = ["home", "search", "user", "friends", "messages", "notifications", "profile", "settings"];
+    const visible = state.phase !== "ready"
+      ? "splash"
+      : (!state.authenticated && protectedScreens.indexOf(state.screen) >= 0 ? "login" : state.screen);
     document.querySelectorAll("[data-screen]").forEach((el) => { el.hidden = el.getAttribute("data-screen") !== visible; });
     document.getElementById("app-nav").hidden = !(state.authenticated && state.phase === "ready");
     const inThread = visible === "messages" && !!state.activeConversationId;
@@ -643,7 +658,25 @@ export function renderWebview(webview: Webview, state: HostState): string {
     const notice = document.getElementById("notice");
     error.hidden = !state.error; error.textContent = state.error || "";
     document.getElementById("retry").hidden = !state.error;
-    notice.hidden = !state.notice; notice.textContent = state.notice || "";
+    if (!state.notice) {
+      shownNotice = "";
+      dismissedNotice = "";
+      window.clearTimeout(noticeTimer);
+      notice.hidden = true;
+      notice.textContent = "";
+    } else if (state.notice === dismissedNotice) {
+      notice.hidden = true;
+    } else if (state.notice !== shownNotice) {
+      shownNotice = state.notice;
+      notice.hidden = false;
+      notice.textContent = state.notice;
+      window.clearTimeout(noticeTimer);
+      const current = state.notice;
+      noticeTimer = window.setTimeout(() => {
+        dismissedNotice = current;
+        notice.hidden = true;
+      }, 4000);
+    }
     const badge = document.getElementById("badge");
     badge.hidden = !(state.unreadNotifications > 0);
     badge.textContent = countText(state.unreadNotifications || 0);
@@ -735,10 +768,21 @@ export function renderWebview(webview: Webview, state: HostState): string {
     const person = openChat ? chatPerson(openChat) : { name: "Chat", username: "" };
     document.getElementById("thread-name").textContent = person.name;
     const otherId = openChat && state.user ? (openChat.participantIds || []).find((id) => id !== state.user.id) : "";
+    const blockedPeer = !!(otherId && (state.blockedUsers || []).some((user) => user.id === otherId));
+    const lock = state.messageLock === "blocked-me" ? "blocked-me" : (state.messageLock === "blocked-by-me" || blockedPeer) ? "blocked-by-me" : "none";
     const threadUser = document.getElementById("thread-user");
-    const typingHere = !!(state.typing && state.typing.conversationId === state.activeConversationId);
-    if (typingHere) threadUser.innerHTML = '<span class="typing" role="status" aria-label="Typing"><i></i><i></i><i></i>typing</span>';
-    else threadUser.textContent = [person.username ? ("@" + person.username) : "", presenceText(presenceFor(otherId))].filter(Boolean).join(" · ");
+    const presenceAllowed = lock === "none";
+    const typingHere = presenceAllowed && !!(state.typing && state.typing.conversationId === state.activeConversationId && state.typing.userId === otherId);
+    const threadActivity = chatActivity(presenceAllowed ? presenceFor(otherId) : null, typingHere, presenceAllowed);
+    const username = person.username ? "@" + person.username : "";
+    const typingHtml = '<span class="typing" role="status" aria-label="Typing"><i></i><i></i><i></i>typing...</span>';
+    const onlineHtml = '<span class="presence" data-state="online" role="img" aria-label="Online"></span>Online';
+    if (threadActivity === "online-typing") threadUser.innerHTML = [esc(username), onlineHtml + " · " + typingHtml].filter(Boolean).join(" · ");
+    else if (threadActivity === "online") threadUser.innerHTML = [esc(username), onlineHtml].filter(Boolean).join(" · ");
+    else if (threadActivity === "typing") threadUser.innerHTML = [esc(username), typingHtml].filter(Boolean).join(" · ");
+    else if (threadActivity === "last-seen") threadUser.textContent = [username, "Last seen " + when(presenceFor(otherId).lastSeenAt)].filter(Boolean).join(" · ");
+    else if (threadActivity === "offline") threadUser.textContent = [username, "Offline"].filter(Boolean).join(" · ");
+    else threadUser.textContent = username;
     const threadAvatar = document.getElementById("thread-avatar");
     if (threadAvatar) threadAvatar.innerHTML = avatarMarkup({ displayName: person.name, username: person.username }, "md");
     const threadProfile = document.getElementById("thread-profile");
@@ -746,8 +790,6 @@ export function renderWebview(webview: Webview, state: HostState): string {
       threadProfile.hidden = !otherId;
       threadProfile.setAttribute("data-id", otherId || "");
     }
-    const blockedPeer = !!(otherId && (state.blockedUsers || []).some((user) => user.id === otherId));
-    const lock = state.messageLock === "blocked-me" ? "blocked-me" : (state.messageLock === "blocked-by-me" || blockedPeer) ? "blocked-by-me" : "none";
     const threadBlock = document.getElementById("thread-block");
     const messageForm = document.getElementById("message-form");
     if (threadBlock && messageForm) {

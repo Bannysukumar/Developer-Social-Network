@@ -1,9 +1,12 @@
 import type { ApiConfig } from "../api/config";
+import { isAuthenticationFailure } from "../api/errors";
 import { notificationDestination, resolveScreen, type ScreenId } from "../shared/flow";
 import { webviewMessageSchema } from "../shared/protocol";
 import type { AuthService } from "./auth-service";
 import { messageFromFrame, notificationFromFrame, presenceFromFrame, typingFromFrame, type ServerFrame, type SocketStatus } from "./chat-socket";
-import { mergeLiveMessage, mergeNotification, mergeReceipt } from "./realtime-state";
+import { unreadMessageNotificationId } from "./desktop-notice";
+import { mergePresence } from "./presence-state";
+import { applyNotificationRead, mergeLiveMessage, mergeNotification, mergeReceipt } from "./realtime-state";
 import { emptyHostState, type HostState } from "./webview";
 
 export class SessionFlow {
@@ -132,7 +135,14 @@ export class SessionFlow {
   ingestFrame(frame: ServerFrame): void {
     const presence = presenceFromFrame(frame);
     if (presence) {
-      this.presenceByUser[presence.userId] = { status: presence.status, lastSeenAt: presence.lastSeenAt ?? null };
+      const next = mergePresence(this.presenceByUser[presence.userId], presence, "socket");
+      if (next) this.presenceByUser[presence.userId] = next;
+      else delete this.presenceByUser[presence.userId];
+      if (next?.status === "OFFLINE" && this.typing?.userId === presence.userId) {
+        this.typing = null;
+        if (this.typingTimer) clearTimeout(this.typingTimer);
+        this.typingTimer = undefined;
+      }
       this.pushState();
       return;
     }
@@ -209,6 +219,28 @@ export class SessionFlow {
     }
     if (next !== "user") this.history = [];
     this.screen = next;
+    this.rememberVisibleRoute();
+  }
+
+  private rememberVisibleRoute(): void {
+    if (this.phase !== "ready" || !this.auth.isAuthenticated()) return;
+    if (this.screen === "user" || this.screen === "splash" || this.screen === "login" || this.screen === "signup" || this.screen === "forgot" || this.screen === "reset") return;
+    this.auth.rememberRoute(this.screen, this.screen === "messages" ? this.activeConversationId : null);
+  }
+
+  private enterLogin(): void {
+    this.clearPrivateState();
+    this.phase = "ready";
+    this.error = null;
+    this.notice = null;
+    this.screen = "login";
+  }
+
+  sessionExpired(): void {
+    void this.auth.invalidateSession().finally(() => {
+      this.enterLogin();
+      this.pushState();
+    });
   }
 
   private clearPrivateState(): void {
@@ -241,25 +273,57 @@ export class SessionFlow {
   async bootstrap(): Promise<void> {
     this.phase = "checking";
     this.screen = "splash";
+    this.error = null;
     this.pushState();
     try {
-      if (this.auth.isAuthenticated()) {
-        await this.auth.refreshProfile();
-        this.phase = "ready";
-        this.show("home", false);
-        await this.loadShell();
-      } else {
-        this.phase = "ready";
-        this.show("login", false);
+      if (!this.auth.isAuthenticated()) {
+        this.enterLogin();
+        return;
       }
-    } catch (error) {
-      await this.auth.logout();
-      this.clearPrivateState();
+      await this.auth.refreshProfile();
+      if (!this.auth.isAuthenticated()) {
+        this.enterLogin();
+        return;
+      }
+      await this.loadShell();
       this.phase = "ready";
-      this.show("login", false);
+      await this.restoreRoute();
+    } catch (error) {
+      if (isAuthenticationFailure(error) || !this.auth.isAuthenticated()) {
+        await this.auth.invalidateSession();
+        this.enterLogin();
+        return;
+      }
+      this.phase = "checking";
+      this.screen = "splash";
       this.error = this.auth.userFacingError(error);
+    } finally {
+      this.pushState();
     }
-    this.pushState();
+  }
+
+  private async restoreRoute(): Promise<void> {
+    const route = this.auth.lastRoute();
+    const screen = route?.screen;
+    if (screen === "messages" && route?.conversationId) {
+      try {
+        const opened = await this.auth.openConversation({ conversationId: route.conversationId });
+        this.activeConversationId = opened.conversation.id;
+        this.messages = opened.messages;
+        this.rememberPreview(opened.conversation.id, opened.messages[0]?.displayText);
+        for (const item of opened.messages) this.seenMessageIds.add(item.id);
+        await this.syncMessageLock(opened.conversation.participantIds);
+        this.show("messages", false);
+        return;
+      } catch (error) {
+        if (isAuthenticationFailure(error) || !this.auth.isAuthenticated()) throw error;
+      }
+    }
+    if (screen === "search" || screen === "friends" || screen === "messages" || screen === "notifications" || screen === "profile" || screen === "settings") {
+      this.show(screen, false);
+      return;
+    }
+    this.show("home", false);
   }
 
   private async loadShell(): Promise<void> {
@@ -289,7 +353,8 @@ export class SessionFlow {
 
   async handleMessage(rawMessage: unknown): Promise<void> {
     const result = webviewMessageSchema.safeParse(rawMessage);
-    if (!result.success || this.phase === "checking") return;
+    if (!result.success) return;
+    if (this.phase === "checking" && result.data.type !== "retry") return;
     const message = result.data;
 
     if (message.type === "ready") {
@@ -326,6 +391,10 @@ export class SessionFlow {
       return;
     }
     if (message.type === "retry") {
+      if (!this.auth.isAuthenticated() || this.screen === "splash") {
+        await this.bootstrap();
+        return;
+      }
       await this.refreshFor(this.screen);
       return;
     }
@@ -333,7 +402,41 @@ export class SessionFlow {
     await this.run(message);
   }
 
-  async focusTarget(target: { screen: ScreenId; conversationId?: string; userId?: string; friendsPanel?: "requests" }): Promise<void> {
+  private async acknowledge(notificationId: string): Promise<void> {
+    const updated = await this.auth.markNotificationRead(notificationId);
+    const applied = applyNotificationRead(this.notifications, this.unreadNotifications, updated);
+    this.notifications = applied.notifications;
+    this.unreadNotifications = applied.unreadCount;
+    try {
+      const notes = await this.auth.loadNotifications();
+      this.notifications = notes.items;
+      this.unreadNotifications = notes.unreadCount;
+    } catch {
+      // The confirmed read response remains in the local list.
+    }
+  }
+
+  private async acknowledgeConversation(conversationId: string): Promise<void> {
+    let notificationId = unreadMessageNotificationId(this.notifications, conversationId);
+    if (!notificationId) {
+      const notes = await this.auth.loadNotifications();
+      this.notifications = notes.items;
+      this.unreadNotifications = notes.unreadCount;
+      notificationId = unreadMessageNotificationId(this.notifications, conversationId);
+    }
+    if (notificationId) await this.acknowledge(notificationId);
+  }
+
+  private async acknowledgeTarget(notificationId?: string, conversationId?: string): Promise<void> {
+    try {
+      if (notificationId) await this.acknowledge(notificationId);
+      else if (conversationId) await this.acknowledgeConversation(conversationId);
+    } catch {
+      // Opening the destination does not depend on the read request.
+    }
+  }
+
+  async focusTarget(target: { screen: ScreenId; conversationId?: string; userId?: string; notificationId?: string; friendsPanel?: "requests" }): Promise<void> {
     if (!this.auth.isAuthenticated()) {
       this.phase = "ready";
       this.show("login", false);
@@ -341,6 +444,9 @@ export class SessionFlow {
       return;
     }
     if (this.phase === "checking") return;
+    try {
+    await this.acknowledgeTarget(target.notificationId, target.conversationId);
+    this.pushState();
     if (target.conversationId) {
       const opened = await this.auth.openConversation({ conversationId: target.conversationId });
       this.activeConversationId = opened.conversation.id;
@@ -363,6 +469,15 @@ export class SessionFlow {
       this.show(target.screen, false);
     }
     this.pushState();
+    } catch (error) {
+      if (isAuthenticationFailure(error) || !this.auth.isAuthenticated()) {
+        await this.auth.invalidateSession();
+        this.enterLogin();
+      } else {
+        this.error = this.auth.userFacingError(error);
+      }
+      this.pushState();
+    }
   }
 
   private async refreshFor(screen: ScreenId): Promise<void> {
@@ -559,7 +674,8 @@ export class SessionFlow {
           this.pushState();
           try {
             const sent = await this.auth.sendMessage(message.conversationId, message.text);
-            this.messages = [sent, ...this.messages.filter((item) => !(item.id.startsWith("local-") && item.displayText === message.text))];
+            this.seenMessageIds.add(sent.id);
+            this.messages = [sent, ...this.messages.filter((item) => item.id !== sent.id && item.id !== localId)];
             this.rememberPreview(message.conversationId, sent.displayText);
             this.activeConversationId = message.conversationId;
           } catch (error) {
@@ -596,11 +712,22 @@ export class SessionFlow {
           break;
         }
         case "openNotification": {
-          const note = this.notifications.find((item) => item.id === message.notificationId);
-          if (note && !note.read) await this.auth.markNotificationRead(note.id);
-          const notes = await this.auth.loadNotifications();
-          this.notifications = notes.items;
-          this.unreadNotifications = notes.unreadCount;
+          let note = this.notifications.find((item) => item.id === message.notificationId);
+          if (!note) {
+            const notes = await this.auth.loadNotifications();
+            this.notifications = notes.items;
+            this.unreadNotifications = notes.unreadCount;
+            note = this.notifications.find((item) => item.id === message.notificationId);
+          }
+          if (!note) break;
+          if (!note.read) {
+            try {
+              await this.acknowledge(note.id);
+            } catch {
+              // The destination still opens when the read request fails.
+            }
+            this.pushState();
+          }
           if (note?.type === "NEW_MESSAGE" && note.referenceId) {
             const opened = await this.auth.openConversation({ conversationId: note.referenceId });
             this.activeConversationId = opened.conversation.id;
@@ -660,7 +787,13 @@ export class SessionFlow {
           break;
       }
     } catch (error) {
-      this.error = this.auth.userFacingError(error);
+      const signingIn = message.type === "login" || message.type === "signup" || message.type === "forgotPassword" || message.type === "resetPassword";
+      if (!signingIn && (isAuthenticationFailure(error) || !this.auth.isAuthenticated())) {
+        await this.auth.invalidateSession();
+        this.enterLogin();
+      } else {
+        this.error = this.auth.userFacingError(error);
+      }
     } finally {
       this.busy = false;
       if (this.auth.isAuthenticated()) await this.warmAvatars();
@@ -670,8 +803,10 @@ export class SessionFlow {
 
   private absorbPresence(people: readonly { id: string; presence?: { status: "ONLINE" | "OFFLINE"; lastSeenAt?: string | null } | null }[]): void {
     for (const person of people) {
-      if (!person?.presence?.status) continue;
-      this.presenceByUser[person.id] = { status: person.presence.status, lastSeenAt: person.presence.lastSeenAt ?? null };
+      if (!person?.id) continue;
+      const next = mergePresence(this.presenceByUser[person.id], person.presence ?? null, "snapshot");
+      if (next) this.presenceByUser[person.id] = next;
+      else delete this.presenceByUser[person.id];
     }
   }
 
@@ -736,8 +871,13 @@ export class SessionFlow {
       this.incomingRequests = social.incoming;
       this.outgoingRequests = social.outgoing;
       this.pushState();
-    } catch {
-      this.error = "Couldn't refresh friends. Open Friends to try again.";
+    } catch (error) {
+      if (isAuthenticationFailure(error) || !this.auth.isAuthenticated()) {
+        await this.auth.invalidateSession();
+        this.enterLogin();
+      } else {
+        this.error = "Couldn't refresh friends. Open Friends to try again.";
+      }
       this.pushState();
     }
   }
@@ -746,8 +886,13 @@ export class SessionFlow {
     try {
       this.conversations = await this.auth.listConversations();
       this.pushState();
-    } catch {
-      this.error = "Couldn't refresh messages. Open Messages to try again.";
+    } catch (error) {
+      if (isAuthenticationFailure(error) || !this.auth.isAuthenticated()) {
+        await this.auth.invalidateSession();
+        this.enterLogin();
+      } else {
+        this.error = "Couldn't refresh messages. Open Messages to try again.";
+      }
       this.pushState();
     }
   }
@@ -762,7 +907,11 @@ export class SessionFlow {
       this.notifications = notes.items;
       this.unreadNotifications = notes.unreadCount;
       this.pushState();
-    } catch {
+    } catch (error) {
+      if (isAuthenticationFailure(error) || !this.auth.isAuthenticated()) {
+        await this.auth.invalidateSession();
+        this.enterLogin();
+      }
       this.pushState();
     }
   }

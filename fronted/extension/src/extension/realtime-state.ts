@@ -19,16 +19,28 @@ export function retryDelayMs(attempt: number): number {
   return Math.min(30_000, 1_000 * 2 ** Math.min(step, 5));
 }
 
+type TrackedMessage = MessageDto & { sendState?: "failed" | "sending" };
+
+function withoutLocalSending(messages: readonly TrackedMessage[], incoming: MessageDto, selfId: string | null): TrackedMessage[] {
+  if (incoming.senderId !== selfId) return [...messages];
+  const localIndex = messages.findIndex((item) => item.id.startsWith("local-") && item.sendState === "sending" && item.conversationId === incoming.conversationId);
+  if (localIndex < 0) return [...messages];
+  return messages.filter((_, index) => index !== localIndex);
+}
+
 export function mergeLiveMessage(
-  messages: readonly MessageDto[],
+  messages: readonly TrackedMessage[],
   incoming: MessageDto,
   activeConversationId: string | null,
   selfId: string | null,
   toastSeq: number,
 ): LivePatch {
   if (incoming.conversationId === activeConversationId) {
-    if (messages.some((item) => item.id === incoming.id)) return { refresh: null };
-    return { messages: [incoming, ...messages], refresh: null };
+    const withoutLocal = withoutLocalSending(messages, incoming, selfId);
+    if (withoutLocal.some((item) => item.id === incoming.id)) {
+      return withoutLocal.length === messages.length ? { refresh: null } : { messages: withoutLocal, refresh: null };
+    }
+    return { messages: [incoming, ...withoutLocal], refresh: null };
   }
   const fromOther = incoming.senderId !== selfId;
   return {
@@ -53,6 +65,19 @@ export function mergeReceipt(messages: readonly MessageDto[], frame: ServerFrame
     return { ...message, status };
   });
   return changed ? next : undefined;
+}
+
+export function applyNotificationRead<T extends { id: string; read: boolean }>(
+  notifications: readonly T[],
+  unreadCount: number,
+  updated: T,
+): { notifications: T[]; unreadCount: number } {
+  const previous = notifications.find((item) => item.id === updated.id);
+  const next = previous
+    ? notifications.map((item) => (item.id === updated.id ? updated : item))
+    : [updated, ...notifications];
+  const unread = previous && !previous.read && updated.read ? Math.max(0, unreadCount - 1) : unreadCount;
+  return { notifications: next, unreadCount: unread };
 }
 
 export function mergeNotification(

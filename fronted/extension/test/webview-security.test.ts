@@ -32,6 +32,11 @@ describe("Webview security shell", () => {
     expect(html).not.toMatch(/<script[^>]+src=/i);
     expect(html).not.toMatch(/https?:\/\//i);
     expect(html).toContain("← Messages");
+    const script = html.match(/<script nonce="[^"]+">([\s\S]*)<\/script>/)?.[1];
+    expect(script).toBeDefined();
+    new Function(script ?? "");
+    expect(html).toContain("justify-content: flex-start");
+    expect(html).not.toMatch(/#message-list\s*\{[^}]*justify-content:\s*(center|flex-end)/);
     expect(html).toContain("Start the conversation by saying hello.");
     expect(html).not.toContain("No messages yet. Say hello.");
   });

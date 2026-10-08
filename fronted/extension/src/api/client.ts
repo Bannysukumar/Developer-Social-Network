@@ -35,6 +35,7 @@ export interface ApiClientOptions {
   readonly fetcher?: typeof fetch;
   readonly getAccessToken?: () => Promise<string | undefined>;
   readonly onUnauthorized?: () => Promise<string | undefined>;
+  readonly onSessionRejected?: () => Promise<void>;
 }
 
 /** Centralized JSON transport with optional bearer authentication. */
@@ -42,11 +43,13 @@ export class ApiClient {
   private readonly fetcher: typeof fetch;
   private readonly getAccessToken?: () => Promise<string | undefined>;
   private readonly onUnauthorized?: () => Promise<string | undefined>;
+  private readonly onSessionRejected?: () => Promise<void>;
 
   constructor(private readonly config: ApiConfig, options: ApiClientOptions = {}) {
     this.fetcher = options.fetcher ?? globalThis.fetch;
     this.getAccessToken = options.getAccessToken;
     this.onUnauthorized = options.onUnauthorized;
+    this.onSessionRejected = options.onSessionRejected;
   }
 
   async request<T>(path: string, dataSchema: z.ZodType<T>, options?: ApiRequestOptions): Promise<T>;
@@ -132,11 +135,14 @@ export class ApiClient {
         throw new ApiError("network", "Could not reach the DevConnect API.");
       }
 
-      if (response.status === 401 && !options.skipAuth && !retried && this.onUnauthorized) {
-        const refreshed = await this.onUnauthorized();
-        if (refreshed) {
-          return this.send(path, dataSchema, { ...options, accessToken: refreshed }, true);
+      if (response.status === 401 && !options.skipAuth) {
+        if (!retried && this.onUnauthorized) {
+          const refreshed = await this.onUnauthorized();
+          if (refreshed) {
+            return this.send(path, dataSchema, { ...options, accessToken: refreshed }, true);
+          }
         }
+        await this.onSessionRejected?.();
       }
 
       if (!response.ok) {
