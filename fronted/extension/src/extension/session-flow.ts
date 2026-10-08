@@ -2,7 +2,7 @@ import type { ApiConfig } from "../api/config";
 import { notificationDestination, resolveScreen, type ScreenId } from "../shared/flow";
 import { webviewMessageSchema } from "../shared/protocol";
 import type { AuthService } from "./auth-service";
-import { messageFromFrame, notificationFromFrame, type ServerFrame, type SocketStatus } from "./chat-socket";
+import { messageFromFrame, notificationFromFrame, presenceFromFrame, typingFromFrame, type ServerFrame, type SocketStatus } from "./chat-socket";
 import { mergeLiveMessage, mergeNotification, mergeReceipt } from "./realtime-state";
 import { emptyHostState, type HostState } from "./webview";
 
@@ -34,16 +34,28 @@ export class SessionFlow {
   private avatars: HostState["avatars"] = {};
   private avatarMisses = new Set<string>();
   private messageLock: HostState["messageLock"] = "none";
+  private notifyMessages = true;
+  private notifyFriendRequests = true;
+  private notifyFriendAccepted = true;
+  private friendsPanel: HostState["friendsPanel"] = "friends";
+  private friendsPanelSeq = 0;
+  private conversationPreviews: Record<string, string> = {};
+  private presenceByUser: Record<string, { status: "ONLINE" | "OFFLINE"; lastSeenAt?: string | null }> = {};
+  private typing: HostState["typing"] = null;
+  private typingTimer: ReturnType<typeof setTimeout> | undefined;
   constructor(
     private readonly auth: AuthService,
     private readonly onChange: () => void,
   ) {}
 
   reloadConfig(config: ApiConfig): void {
+    const previous = this.auth.apiConfig.baseUrl;
     try {
       this.auth.reloadConfig(config);
-      this.notice = "API settings updated.";
-      this.error = null;
+      if (previous !== config.baseUrl) {
+        this.notice = "API settings updated.";
+        this.error = null;
+      }
     } catch (error) {
       this.error = this.auth.userFacingError(error);
     }
@@ -82,7 +94,23 @@ export class SessionFlow {
       blockedUsers: this.blockedUsers,
       avatars: this.avatars,
       messageLock: this.messageLock,
+      notifyMessages: this.notifyMessages,
+      notifyFriendRequests: this.notifyFriendRequests,
+      notifyFriendAccepted: this.notifyFriendAccepted,
+      friendsPanel: this.friendsPanel,
+      friendsPanelSeq: this.friendsPanelSeq,
+      unreadByConversation: { ...this.unreadByConversation },
+      conversationPreviews: { ...this.conversationPreviews },
+      presenceByUser: { ...this.presenceByUser },
+      typing: this.typing,
     };
+  }
+
+  setNotices(prefs: { messages: boolean; friendRequests: boolean; friendAccepted: boolean }): void {
+    this.notifyMessages = prefs.messages;
+    this.notifyFriendRequests = prefs.friendRequests;
+    this.notifyFriendAccepted = prefs.friendAccepted;
+    this.pushState();
   }
 
   private pushState(): void {
@@ -102,6 +130,29 @@ export class SessionFlow {
   }
 
   ingestFrame(frame: ServerFrame): void {
+    const presence = presenceFromFrame(frame);
+    if (presence) {
+      this.presenceByUser[presence.userId] = { status: presence.status, lastSeenAt: presence.lastSeenAt ?? null };
+      this.pushState();
+      return;
+    }
+    const typing = typingFromFrame(frame);
+    if (typing) {
+      if (this.typingTimer) clearTimeout(this.typingTimer);
+      this.typingTimer = undefined;
+      if (typing.active && typing.userId !== this.auth.getUser()?.id) {
+        this.typing = { conversationId: typing.conversationId, userId: typing.userId };
+        this.typingTimer = setTimeout(() => {
+          this.typing = null;
+          this.typingTimer = undefined;
+          this.pushState();
+        }, 4000);
+      } else if (this.typing?.conversationId === typing.conversationId) {
+        this.typing = null;
+      }
+      this.pushState();
+      return;
+    }
     const message = messageFromFrame(frame);
     if (message) {
       if (this.seenMessageIds.has(message.id)) return;
@@ -114,6 +165,7 @@ export class SessionFlow {
         this.toastSeq,
       );
       if (patch.messages) this.messages = patch.messages.map((item) => this.auth.displayMessage(item));
+      this.rememberPreview(message.conversationId, this.auth.displayMessage(message).displayText);
       if (patch.bumpConversation) {
         this.unreadByConversation[patch.bumpConversation] = (this.unreadByConversation[patch.bumpConversation] ?? 0) + 1;
         this.unreadMessages = Object.values(this.unreadByConversation).reduce((sum, count) => sum + count, 0);
@@ -173,6 +225,10 @@ export class SessionFlow {
     this.unreadNotifications = 0;
     this.unreadMessages = 0;
     this.unreadByConversation = {};
+    this.presenceByUser = {};
+    this.typing = null;
+    if (this.typingTimer) clearTimeout(this.typingTimer);
+    this.typingTimer = undefined;
     this.seenMessageIds.clear();
     this.toast = null;
     this.devices = [];
@@ -215,6 +271,11 @@ export class SessionFlow {
     this.friends = social.friends;
     this.incomingRequests = social.incoming;
     this.outgoingRequests = social.outgoing;
+    this.absorbPresence([
+      ...social.friends,
+      ...social.incoming.map((item) => item.counterpart),
+      ...social.outgoing.map((item) => item.counterpart),
+    ]);
     this.conversations = conversations;
     this.notifications = notes.items;
     this.unreadNotifications = notes.unreadCount;
@@ -272,7 +333,7 @@ export class SessionFlow {
     await this.run(message);
   }
 
-  async focusTarget(target: { screen: ScreenId; conversationId?: string }): Promise<void> {
+  async focusTarget(target: { screen: ScreenId; conversationId?: string; userId?: string; friendsPanel?: "requests" }): Promise<void> {
     if (!this.auth.isAuthenticated()) {
       this.phase = "ready";
       this.show("login", false);
@@ -284,13 +345,21 @@ export class SessionFlow {
       const opened = await this.auth.openConversation({ conversationId: target.conversationId });
       this.activeConversationId = opened.conversation.id;
       this.messages = opened.messages;
+      this.rememberPreview(opened.conversation.id, opened.messages[0]?.displayText);
       for (const item of opened.messages) this.seenMessageIds.add(item.id);
       delete this.unreadByConversation[opened.conversation.id];
       this.unreadMessages = Object.values(this.unreadByConversation).reduce((sum, count) => sum + count, 0);
       this.conversations = await this.auth.listConversations();
       await this.syncMessageLock(opened.conversation.participantIds);
       this.show("messages", false);
+    } else if (target.userId) {
+      this.selectedUser = await this.auth.getUserById(target.userId);
+      this.show("user", false);
     } else {
+      if (target.friendsPanel) {
+        this.friendsPanel = target.friendsPanel;
+        this.friendsPanelSeq += 1;
+      }
       this.show(target.screen, false);
     }
     this.pushState();
@@ -378,6 +447,7 @@ export class SessionFlow {
             bio: message.bio,
             accountType: message.accountType,
             clearProfileImage: message.clearProfileImage,
+            showActivityStatus: message.showActivityStatus,
           });
           this.notice = previous && message.accountType && previous !== message.accountType
             ? `Account is now ${message.accountType === "PRIVATE" ? "private" : "public"}.`
@@ -458,6 +528,7 @@ export class SessionFlow {
           });
           this.activeConversationId = opened.conversation.id;
           this.messages = opened.messages;
+          this.rememberPreview(opened.conversation.id, opened.messages[0]?.displayText);
           for (const item of opened.messages) this.seenMessageIds.add(item.id);
           delete this.unreadByConversation[opened.conversation.id];
           this.unreadMessages = Object.values(this.unreadByConversation).reduce((sum, count) => sum + count, 0);
@@ -473,18 +544,48 @@ export class SessionFlow {
               : "You can't message this user.";
             break;
           }
+          const localId = `local-${Date.now()}`;
+          this.messages = [{
+            id: localId,
+            conversationId: message.conversationId,
+            senderId: this.auth.getUser()?.id ?? "me",
+            recipientId: this.peerId() ?? "peer",
+            ciphertext: "",
+            messageType: "TEXT",
+            status: "SENT",
+            displayText: message.text,
+            sendState: "sending",
+          }, ...this.messages.filter((item) => !(item.id.startsWith("local-") && item.displayText === message.text))];
+          this.pushState();
           try {
             const sent = await this.auth.sendMessage(message.conversationId, message.text);
-            this.messages = [sent, ...this.messages];
+            this.messages = [sent, ...this.messages.filter((item) => !(item.id.startsWith("local-") && item.displayText === message.text))];
+            this.rememberPreview(message.conversationId, sent.displayText);
             this.activeConversationId = message.conversationId;
           } catch (error) {
             const text = this.auth.userFacingError(error);
+            if (/encryption key|not registered/.test(text)) {
+              this.messages = this.messages.filter((item) => item.id !== localId);
+              this.error = text;
+              break;
+            }
             if (/can't interact|Only friends can exchange messages/.test(text)) {
+              this.messages = this.messages.filter((item) => item.id !== localId);
               const lock = await this.syncMessageLock();
               this.error = lock === "blocked-me" ? "You can't message this user." : text;
               break;
             }
-            throw error;
+            this.messages = [{
+              id: `local-${Date.now()}`,
+              conversationId: message.conversationId,
+              senderId: this.auth.getUser()?.id ?? "me",
+              recipientId: this.peerId() ?? "peer",
+              ciphertext: "",
+              messageType: "TEXT",
+              status: "SENT",
+              displayText: message.text,
+              sendState: "failed",
+            }, ...this.messages.filter((item) => !(item.id.startsWith("local-") && item.displayText === message.text))];
           }
           break;
         }
@@ -504,9 +605,20 @@ export class SessionFlow {
             const opened = await this.auth.openConversation({ conversationId: note.referenceId });
             this.activeConversationId = opened.conversation.id;
             this.messages = opened.messages;
+            this.rememberPreview(opened.conversation.id, opened.messages[0]?.displayText);
+            for (const item of opened.messages) this.seenMessageIds.add(item.id);
+            delete this.unreadByConversation[opened.conversation.id];
+            this.unreadMessages = Object.values(this.unreadByConversation).reduce((sum, count) => sum + count, 0);
             await this.syncMessageLock(opened.conversation.participantIds);
             this.show("messages", true);
+          } else if (note?.type === "FRIEND_REQUEST_ACCEPTED" && note.actorId) {
+            this.selectedUser = await this.auth.getUserById(note.actorId);
+            this.show("user", true);
           } else if (note) {
+            if (note.type === "FRIEND_REQUEST") {
+              this.friendsPanel = "requests";
+              this.friendsPanelSeq += 1;
+            }
             this.show(notificationDestination(note.type), true);
             if (note.type === "FRIEND_REQUEST") {
               const social = await this.auth.loadSocial();
@@ -554,6 +666,18 @@ export class SessionFlow {
       if (this.auth.isAuthenticated()) await this.warmAvatars();
       this.pushState();
     }
+  }
+
+  private absorbPresence(people: readonly { id: string; presence?: { status: "ONLINE" | "OFFLINE"; lastSeenAt?: string | null } | null }[]): void {
+    for (const person of people) {
+      if (!person?.presence?.status) continue;
+      this.presenceByUser[person.id] = { status: person.presence.status, lastSeenAt: person.presence.lastSeenAt ?? null };
+    }
+  }
+
+  private rememberPreview(conversationId: string, text: string | undefined): void {
+    const preview = text?.trim();
+    if (preview) this.conversationPreviews[conversationId] = preview;
   }
 
   private peerId(participantIds?: readonly string[]): string | undefined {

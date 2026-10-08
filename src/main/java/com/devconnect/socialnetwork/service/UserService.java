@@ -110,11 +110,11 @@ public class UserService {
             throw new ResourceNotFoundException("Resource not found");
         }
         if (blocks.blockedByMe()) {
-            return userMapper.toVisible(target, RelationshipView.BLOCKED, true);
+            return userMapper.toVisible(target, RelationshipView.BLOCKED, true, viewerId);
         }
         RelationshipView relationship = relationshipOf(viewerId, targetUserId);
         boolean limited = target.getAccountType() == AccountType.PRIVATE && relationship != RelationshipView.FRIENDS;
-        return userMapper.toVisible(target, relationship, limited);
+        return userMapper.toVisible(target, relationship, limited, viewerId);
     }
 
     public UserProfileResponse replace(String userId, ReplaceProfileRequest request) {
@@ -133,7 +133,7 @@ public class UserService {
 
     public UserProfileResponse patch(String userId, UpdateProfileRequest request) {
         if (request.displayName() == null && request.bio() == null && request.accountType() == null
-                && !Boolean.TRUE.equals(request.clearProfileImage())) {
+                && !Boolean.TRUE.equals(request.clearProfileImage()) && request.showActivityStatus() == null) {
             throw new ValidationFailedException("At least one profile field is required");
         }
         UserEntity user = require(userId);
@@ -150,6 +150,9 @@ public class UserService {
         if (Boolean.TRUE.equals(request.clearProfileImage())) {
             fileStorageService.delete(user.getProfileImageFileId());
             user.setProfileImageFileId(null);
+        }
+        if (request.showActivityStatus() != null) {
+            user.setShowActivityStatus(request.showActivityStatus());
         }
         user.setUpdatedAt(clock.instant());
         return userMapper.toSelf(userRepository.save(user));
@@ -172,7 +175,7 @@ public class UserService {
         List<UserSummaryResponse> accounts = new ArrayList<>();
         for (String blockedId : blockService.blockedUserIds(userId)) {
             userRepository.findById(blockedId).ifPresent(user ->
-                    accounts.add(userMapper.toSummary(user, RelationshipView.BLOCKED)));
+                    accounts.add(userMapper.toSummary(user, RelationshipView.BLOCKED, userId)));
         }
         return accounts;
     }
@@ -207,7 +210,7 @@ public class UserService {
             } else if (pending.containsKey(user.getId())) {
                 view = pending.get(user.getId());
             }
-            summaries.add(userMapper.toSummary(user, view));
+            summaries.add(userMapper.toSummary(user, view, viewerId));
         }
         int totalPages = pageable.getPageSize() == 0 ? 0 : (int) Math.ceil((double) total / pageable.getPageSize());
         return new PageResponse<>(summaries, pageable.getPageNumber(), pageable.getPageSize(), total, totalPages,

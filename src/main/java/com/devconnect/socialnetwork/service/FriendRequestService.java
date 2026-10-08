@@ -225,7 +225,7 @@ public class FriendRequestService {
     }
 
     private FriendRequestResponse toResponse(FriendRequestEntity request, String viewerId, UserEntity counterpart) {
-        var summary = counterpart == null ? null : userMapper.toSummary(counterpart, RelationshipView.NONE);
+        var summary = counterpart == null ? null : userMapper.toSummary(counterpart, RelationshipView.NONE, viewerId);
         return new FriendRequestResponse(
                 request.getId(),
                 request.getSenderId(),

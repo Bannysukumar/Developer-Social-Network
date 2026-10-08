@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { createDeviceMaterial, verifySignedPreKey } from "../src/extension/crypto/device-keys";
+import { createDeviceMaterial, hasVerifiedSignedPreKey, verifySignedPreKey } from "../src/extension/crypto/device-keys";
 import { decryptMessage, encryptForDevices, encryptForRecipient } from "../src/extension/crypto/message-cipher";
 
 describe("device message encryption", () => {
@@ -9,6 +9,16 @@ describe("device message encryption", () => {
     alice.deviceId = "alice-device";
     bob.deviceId = "bob-device";
     expect(verifySignedPreKey(alice.identityPublic, alice.signedPreKeyPublic, alice.signedPreKeySignature)).toBe(true);
+    expect(hasVerifiedSignedPreKey({
+      algorithm: "Ed25519",
+      identityPublicKey: bob.identityPublic,
+      signedPreKey: { publicKey: bob.signedPreKeyPublic, signature: bob.signedPreKeySignature },
+    })).toBe(true);
+    expect(hasVerifiedSignedPreKey({
+      algorithm: "Ed25519",
+      identityPublicKey: bob.identityPublic,
+      signedPreKey: null,
+    })).toBe(false);
 
     const ciphertext = encryptForRecipient("hello DevConnect", "conversation-1", alice, {
       deviceId: bob.deviceId,

@@ -22,6 +22,8 @@ public record UserProfileResponse(
         @JsonInclude(JsonInclude.Include.NON_NULL) Set<Role> roles,
         RelationshipView relationship,
         @JsonInclude(JsonInclude.Include.NON_NULL) Instant createdAt,
-        boolean limited
+        boolean limited,
+        @JsonInclude(JsonInclude.Include.NON_NULL) PresenceView presence,
+        @JsonInclude(JsonInclude.Include.NON_NULL) Boolean showActivityStatus
 ) {
 }

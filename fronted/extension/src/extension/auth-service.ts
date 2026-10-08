@@ -22,13 +22,14 @@ import type {
   UserProfileDto,
   UserSummaryDto,
 } from "../shared/api-types";
-import { createDeviceMaterial, verifySignedPreKey, type DeviceMaterial } from "./crypto/device-keys";
+import { createDeviceMaterial, hasVerifiedSignedPreKey, type DeviceMaterial } from "./crypto/device-keys";
 import { decryptMessage, encryptForDevices, isEncryptedEnvelope, type RecipientBundle } from "./crypto/message-cipher";
 import { decodeOpaqueText } from "../shared/payload";
 import { SessionStore } from "./session";
 
 export interface DisplayMessage extends MessageDto {
   readonly displayText: string;
+  readonly sendState?: "failed" | "sending";
 }
 
 export interface AuthServiceOptions {
@@ -157,6 +158,7 @@ export class AuthService {
     }
     await this.session.clear();
     this.peerNames.clear();
+    this.keysPublished = false;
   }
 
   async refreshProfile(): Promise<UserProfileDto> {
@@ -289,29 +291,42 @@ export class AuthService {
     return this.deviceKeys?.deviceId !== undefined;
   }
 
+  private keysPublished = false;
+
   async ensureDeviceKeys(): Promise<void> {
-    if (this.deviceKeys?.deviceId) return;
-    const stored = await this.session.getDeviceKeys();
-    if (stored) {
-      const parsed = JSON.parse(stored) as DeviceMaterial;
-      if (parsed.deviceId && parsed.identityPrivateJwk && parsed.signedPreKeyPrivateJwk) {
-        this.deviceKeys = parsed;
-        return;
+    const material = await this.loadDeviceMaterial();
+    const userId = this.getUser()?.id;
+    if (this.keysPublished && material.deviceId) {
+      this.deviceKeys = material;
+      return;
+    }
+    const published = material.deviceId && userId
+      ? await this.publishedKeyIsUsable(userId, material.deviceId)
+      : false;
+    if (published === true) {
+      this.deviceKeys = material;
+      this.keysPublished = true;
+      return;
+    }
+    if (published === "unknown" && material.deviceId) {
+      this.deviceKeys = material;
+      return;
+    }
+    if (!material.deviceId) {
+      const registered = await this.keysApi.registerIdentity({ publicKey: material.identityPublic });
+      material.deviceId = registered.id;
+      await this.uploadPreKeys(material, true);
+    } else {
+      try {
+        await this.uploadPreKeys(material, false);
+      } catch {
+        const registered = await this.keysApi.registerIdentity({ publicKey: material.identityPublic });
+        material.deviceId = registered.id;
+        await this.uploadPreKeys(material, true);
       }
     }
-    const material = createDeviceMaterial();
-    const registered = await this.keysApi.registerIdentity({ publicKey: material.identityPublic });
-    material.deviceId = registered.id;
-    await this.keysApi.registerPreKeys({
-      deviceId: registered.id,
-      signedPreKey: {
-        preKeyId: material.signedPreKeyId,
-        publicKey: material.signedPreKeyPublic,
-        signature: material.signedPreKeySignature,
-      },
-      oneTimePreKeys: material.oneTime.map((item) => ({ preKeyId: item.id, publicKey: item.publicKey })),
-    });
     this.deviceKeys = material;
+    this.keysPublished = true;
     await this.session.saveDeviceKeys(JSON.stringify(material));
   }
 
@@ -404,8 +419,7 @@ export class AuthService {
     const recipients: RecipientBundle[] = [];
     for (const device of devices) {
       const signed = device.signedPreKey;
-      if (device.algorithm !== "Ed25519" || !signed?.signature) continue;
-      if (!verifySignedPreKey(device.identityPublicKey, signed.publicKey, signed.signature)) continue;
+      if (!hasVerifiedSignedPreKey(device) || !signed?.signature) continue;
       recipients.push({
         deviceId: device.deviceId,
         identityPublicKey: device.identityPublicKey,
@@ -416,9 +430,53 @@ export class AuthService {
       });
     }
     if (recipients.length === 0) {
-      throw new ApiError("configuration", "This friend has not published a verified encryption key.");
+      const published = devices.some((device) => device.signedPreKey?.publicKey);
+      throw new ApiError(
+        "configuration",
+        published
+          ? "This friend's encryption key could not be verified. Ask them to open DevConnect again, then send again."
+          : "This friend has not published an encryption key yet. Ask them to open DevConnect and sign in, then send again.",
+      );
     }
     return recipients;
+  }
+
+  private async loadDeviceMaterial(): Promise<DeviceMaterial> {
+    if (this.deviceKeys?.identityPrivateJwk && this.deviceKeys.signedPreKeyPrivateJwk) {
+      return this.deviceKeys;
+    }
+    const stored = await this.session.getDeviceKeys();
+    if (stored) {
+      const parsed = JSON.parse(stored) as DeviceMaterial;
+      if (parsed.identityPrivateJwk && parsed.signedPreKeyPrivateJwk) return parsed;
+    }
+    return createDeviceMaterial();
+  }
+
+  private async publishedKeyIsUsable(userId: string, deviceId: string): Promise<true | false | "unknown"> {
+    try {
+      const bundle = await this.keysApi.bundle(userId);
+      return bundle.devices.some((device) => device.deviceId === deviceId && hasVerifiedSignedPreKey(device));
+    } catch {
+      return "unknown";
+    }
+  }
+
+  private uploadPreKeys(material: DeviceMaterial, includeOneTime: boolean): Promise<unknown> {
+    if (!material.deviceId) {
+      throw new ApiError("configuration", "This device is not registered.");
+    }
+    return this.keysApi.registerPreKeys({
+      deviceId: material.deviceId,
+      signedPreKey: {
+        preKeyId: material.signedPreKeyId,
+        publicKey: material.signedPreKeyPublic,
+        signature: material.signedPreKeySignature,
+      },
+      oneTimePreKeys: includeOneTime
+        ? material.oneTime.map((item) => ({ preKeyId: item.id, publicKey: item.publicKey }))
+        : [],
+    });
   }
 
   private async refreshAccessToken(): Promise<string | undefined> {

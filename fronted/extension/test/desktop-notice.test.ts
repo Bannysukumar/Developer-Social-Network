@@ -7,8 +7,9 @@ describe("desktop notices", () => {
   test("skips a message the user is already reading and a duplicate id", () => {
     const seen = new Set<string>();
     expect(decideMessageNotice("m1", "c1", false, true, prefs, seen)).toBeNull();
-    const first = decideMessageNotice("m1", "c1", false, false, prefs, seen);
+    const first = decideMessageNotice("m1", "c1", false, false, prefs, seen, "shaikn");
     expect(first?.action).toBe("Open message");
+    expect(first?.body).toBe("shaikn sent you a message");
     expect(first?.conversationId).toBe("c1");
     seen.add("m1");
     expect(decideMessageNotice("m1", "c1", false, false, prefs, seen)).toBeNull();
@@ -37,5 +38,23 @@ describe("desktop notices", () => {
       message: "Rahul sent you a friend request",
       read: false,
     }, { ...prefs, friendRequests: false }, seen)).toBeNull();
+    const accepted = decideNotificationNotice({
+      id: "n3",
+      type: "FRIEND_REQUEST_ACCEPTED",
+      actorId: "user-2",
+      message: "Rahul accepted your friend request",
+      read: false,
+    }, prefs, seen);
+    expect(accepted?.action).toBe("View profile");
+    expect(accepted?.screen).toBe("user");
+    expect(accepted?.userId).toBe("user-2");
+    expect(decideNotificationNotice({
+      id: "n4",
+      type: "FRIEND_REQUEST_ACCEPTED",
+      actorId: "user-2",
+      message: "Rahul accepted your friend request",
+      read: false,
+    }, { ...prefs, friendAccepted: false }, seen)).toBeNull();
+    expect(request?.friendsPanel).toBe("requests");
   });
 });

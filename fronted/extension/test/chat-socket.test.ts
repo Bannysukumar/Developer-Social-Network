@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { chatSocketUrl, messageFromFrame, parseServerFrame } from "../src/extension/chat-socket";
+import { chatSocketUrl, messageFromFrame, parseServerFrame, presenceFromFrame, typingFromFrame } from "../src/extension/chat-socket";
 
 describe("chat socket contract", () => {
   test("uses WSS for HTTPS and WS only for an already allowed HTTP base", () => {
@@ -28,5 +28,14 @@ describe("chat socket contract", () => {
     });
     expect(message?.id).toBe("m1");
     expect(messageFromFrame({ type: "PONG" })).toBeUndefined();
+  });
+
+  test("reads presence and typing without treating them as messages", () => {
+    const frame = parseServerFrame('{"type":"PRESENCE_UPDATE","data":{"userId":"u2","status":"ONLINE"}}');
+    expect(presenceFromFrame(frame!)?.status).toBe("ONLINE");
+    expect(messageFromFrame(frame!)).toBeUndefined();
+    const typing = parseServerFrame('{"type":"TYPING_START","data":{"conversationId":"c1","userId":"u2"}}');
+    expect(typingFromFrame(typing!)?.active).toBe(true);
+    expect(typingFromFrame(parseServerFrame('{"type":"TYPING_STOP","data":{"conversationId":"c1","userId":"u2"}}')!)?.active).toBe(false);
   });
 });

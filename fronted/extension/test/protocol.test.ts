@@ -32,6 +32,15 @@ const host = {
   blockedUsers: [],
   avatars: {},
   messageLock: "none" as const,
+  notifyMessages: true,
+  notifyFriendRequests: true,
+  notifyFriendAccepted: true,
+  friendsPanel: "friends" as const,
+  friendsPanelSeq: 0,
+  unreadByConversation: {},
+  conversationPreviews: {},
+  presenceByUser: {},
+  typing: null,
 };
 
 describe("Webview bridge protocol", () => {

@@ -58,6 +58,13 @@ export const webviewMessageSchema = z.discriminatedUnion("type", [
     bio: z.string().max(500).nullable().optional(),
     accountType: z.enum(["PUBLIC", "PRIVATE"]).optional(),
     clearProfileImage: z.boolean().optional(),
+    showActivityStatus: z.boolean().optional(),
+  }).strict(),
+  z.object({
+    version: z.literal(1),
+    type: z.literal("typing"),
+    conversationId: z.string().min(1),
+    active: z.boolean(),
   }).strict(),
   z.object({
     version: z.literal(1),
@@ -66,6 +73,12 @@ export const webviewMessageSchema = z.discriminatedUnion("type", [
     dataBase64: z.string().min(1).max(2_900_000),
   }).strict(),
   z.object({ version: z.literal(1), type: z.literal("removeAvatar") }).strict(),
+  z.object({
+    version: z.literal(1),
+    type: z.literal("setNotify"),
+    key: z.enum(["messages", "friendRequests", "friendAccepted"]),
+    enabled: z.boolean(),
+  }).strict(),
   z.object({
     version: z.literal(1),
     type: z.literal("searchUsers"),
@@ -144,7 +157,10 @@ export const webviewMessageSchema = z.discriminatedUnion("type", [
 
 export type WebviewMessage = z.infer<typeof webviewMessageSchema>;
 
-const displayMessageSchema = messageSchema.extend({ displayText: z.string() });
+const displayMessageSchema = messageSchema.extend({
+  displayText: z.string(),
+  sendState: z.enum(["failed", "sending"]).optional(),
+});
 
 export const hostMessageSchema = z.object({
   version: z.literal(1),
@@ -177,6 +193,21 @@ export const hostMessageSchema = z.object({
   blockedUsers: z.array(userSummarySchema),
   avatars: z.record(z.string(), z.string()),
   messageLock: z.enum(["none", "blocked-by-me", "blocked-me"]),
+  notifyMessages: z.boolean(),
+  notifyFriendRequests: z.boolean(),
+  notifyFriendAccepted: z.boolean(),
+  friendsPanel: z.enum(["friends", "requests", "sent"]),
+  friendsPanelSeq: z.number().int().nonnegative(),
+  unreadByConversation: z.record(z.string(), z.number().int().nonnegative()),
+  conversationPreviews: z.record(z.string(), z.string()),
+  presenceByUser: z.record(z.string(), z.object({
+    status: z.enum(["ONLINE", "OFFLINE"]),
+    lastSeenAt: z.string().nullable().optional(),
+  })),
+  typing: z.object({
+    conversationId: z.string().min(1),
+    userId: z.string().min(1),
+  }).nullable(),
 }).strict();
 
 export type HostMessage = z.infer<typeof hostMessageSchema>;

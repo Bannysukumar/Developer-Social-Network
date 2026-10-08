@@ -14,7 +14,7 @@ class DevConnectHost implements vscode.WebviewViewProvider, vscode.Disposable {
   private view: vscode.WebviewView | undefined;
   private started = false;
   private socketToken: string | undefined;
-  private pending: { screen: ScreenId; conversationId?: string } | undefined;
+  private pending: { screen: ScreenId; conversationId?: string; userId?: string; friendsPanel?: "requests" } | undefined;
   private readonly statusBar: vscode.StatusBarItem;
 
   constructor(private readonly auth: AuthService) {
@@ -35,6 +35,7 @@ class DevConnectHost implements vscode.WebviewViewProvider, vscode.Disposable {
   async start(): Promise<void> {
     if (this.started) return;
     this.started = true;
+    this.flow.setNotices(readNoticePrefs());
     await this.flow.bootstrap();
     this.renderStatus();
     await this.consumePending();
@@ -45,7 +46,7 @@ class DevConnectHost implements vscode.WebviewViewProvider, vscode.Disposable {
     view.webview.options = { enableScripts: true, localResourceRoots: [] };
     view.webview.html = renderWebview(view.webview, this.flow.snapshot());
     view.webview.onDidReceiveMessage((rawMessage: unknown) => {
-      void this.flow.handleMessage(rawMessage);
+      void this.onWebviewMessage(rawMessage);
     });
     view.onDidDispose(() => {
       if (this.view === view) this.view = undefined;
@@ -60,6 +61,7 @@ class DevConnectHost implements vscode.WebviewViewProvider, vscode.Disposable {
 
   reloadConfig(): void {
     this.flow.reloadConfig(readApiConfigFromWorkspace());
+    this.flow.setNotices(readNoticePrefs());
     this.socketToken = undefined;
     void this.syncChat();
   }
@@ -109,13 +111,21 @@ class DevConnectHost implements vscode.WebviewViewProvider, vscode.Disposable {
       onFrame: (frame) => {
         const before = this.flow.snapshot();
         this.flow.ingestFrame(frame);
-        void this.showDesktopNotice(frame, before.screen === "messages" ? before.activeConversationId : null);
+        void this.showDesktopNotice(
+          frame,
+          before.screen === "messages" ? before.activeConversationId : null,
+          before.conversations,
+        );
       },
       onStatus: (status, recovered) => this.flow.setConnection(status, recovered),
     }, () => this.auth.ensureFreshAccessToken());
   }
 
-  private async showDesktopNotice(frame: Parameters<typeof messageFromFrame>[0], openConversationId: string | null): Promise<void> {
+  private async showDesktopNotice(
+    frame: Parameters<typeof messageFromFrame>[0],
+    openConversationId: string | null,
+    conversations: readonly { id: string; peerDisplayName?: string; peerUsername?: string }[],
+  ): Promise<void> {
     const prefs = readNoticePrefs();
     const viewing = this.view?.visible === true;
     const message = messageFromFrame(frame);
@@ -128,6 +138,9 @@ class DevConnectHost implements vscode.WebviewViewProvider, vscode.Disposable {
         viewing && openConversationId === message.conversationId,
         prefs,
         this.seenNotices,
+        conversations.find((item) => item.id === message.conversationId)?.peerDisplayName
+          || conversations.find((item) => item.id === message.conversationId)?.peerUsername
+          || "Someone",
       )
       : (() => {
         const note = notificationFromFrame(frame);
@@ -137,7 +150,12 @@ class DevConnectHost implements vscode.WebviewViewProvider, vscode.Disposable {
     this.rememberNotice(target.id);
     const choice = await vscode.window.showInformationMessage(target.body, target.action);
     if (choice !== target.action) return;
-    this.pending = { screen: target.screen, conversationId: target.conversationId };
+    this.pending = {
+      screen: target.screen,
+      conversationId: target.conversationId,
+      userId: target.userId,
+      friendsPanel: target.friendsPanel,
+    };
     await vscode.commands.executeCommand("workbench.view.extension.devconnect");
     await this.consumePending();
   }
@@ -148,6 +166,31 @@ class DevConnectHost implements vscode.WebviewViewProvider, vscode.Disposable {
       const oldest = this.seenNotices.values().next().value;
       if (oldest) this.seenNotices.delete(oldest);
     }
+  }
+
+  private async onWebviewMessage(rawMessage: unknown): Promise<void> {
+    if (rawMessage && typeof rawMessage === "object" && "type" in rawMessage && rawMessage.type === "typing") {
+      const message = rawMessage as { conversationId?: string; active?: boolean };
+      if (typeof message.conversationId === "string" && typeof message.active === "boolean") {
+        this.chat.send({ type: message.active ? "TYPING_START" : "TYPING_STOP", conversationId: message.conversationId });
+      }
+      return;
+    }
+    if (rawMessage && typeof rawMessage === "object" && "type" in rawMessage && rawMessage.type === "setNotify") {
+      const message = rawMessage as { key?: string; enabled?: boolean };
+      const setting = message.key === "messages"
+        ? "notifyMessages"
+        : message.key === "friendRequests"
+          ? "notifyFriendRequests"
+          : message.key === "friendAccepted"
+            ? "notifyFriendAccepted"
+            : "";
+      if (setting && typeof message.enabled === "boolean") {
+        await vscode.workspace.getConfiguration("devconnect").update(setting, message.enabled, vscode.ConfigurationTarget.Global);
+      }
+      return;
+    }
+    await this.flow.handleMessage(rawMessage);
   }
 
   private async consumePending(): Promise<void> {

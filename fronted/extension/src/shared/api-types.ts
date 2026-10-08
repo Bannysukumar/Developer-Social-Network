@@ -31,6 +31,11 @@ export const userProfileSchema = z.object({
   relationship: relationshipSchema.optional(),
   createdAt: z.string().optional(),
   limited: z.boolean().optional(),
+  presence: z.object({
+    status: z.enum(["ONLINE", "OFFLINE"]),
+    lastSeenAt: z.string().nullable().optional(),
+  }).optional(),
+  showActivityStatus: z.boolean().optional(),
 }).passthrough();
 
 export type UserProfileDto = z.infer<typeof userProfileSchema>;
@@ -42,6 +47,10 @@ export const userSummarySchema = z.object({
   profileImageUrl: z.string().nullable().optional(),
   accountType: accountTypeSchema,
   relationship: relationshipSchema.optional(),
+  presence: z.object({
+    status: z.enum(["ONLINE", "OFFLINE"]),
+    lastSeenAt: z.string().nullable().optional(),
+  }).optional(),
 }).passthrough();
 
 export type UserSummaryDto = z.infer<typeof userSummarySchema>;
@@ -97,6 +106,7 @@ export const updateProfileRequestSchema = z.object({
   bio: z.string().max(500).nullable().optional(),
   accountType: accountTypeSchema.optional(),
   clearProfileImage: z.boolean().optional(),
+  showActivityStatus: z.boolean().optional(),
 }).strict();
 
 export type UpdateProfileRequestDto = z.infer<typeof updateProfileRequestSchema>;

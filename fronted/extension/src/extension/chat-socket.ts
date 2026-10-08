@@ -4,7 +4,7 @@ import { messageSchema, notificationSchema, type MessageDto, type NotificationDt
 import { retryDelayMs } from "./realtime-state";
 
 const serverFrameSchema = z.object({
-  type: z.enum(["READY", "MESSAGE", "DELIVERED", "READ", "PONG", "ERROR", "NOTIFICATION"]),
+  type: z.enum(["READY", "MESSAGE", "DELIVERED", "READ", "PONG", "ERROR", "NOTIFICATION", "PRESENCE_UPDATE", "TYPING_START", "TYPING_STOP"]),
   data: z.unknown().optional(),
 }).passthrough();
 
@@ -41,6 +41,34 @@ export function notificationFromFrame(frame: ServerFrame): NotificationDto | und
   return parsed.success ? parsed.data : undefined;
 }
 
+const presenceSchema = z.object({
+  userId: z.string().min(1),
+  status: z.enum(["ONLINE", "OFFLINE"]),
+  lastSeenAt: z.string().nullable().optional(),
+}).passthrough();
+
+export type PresenceUpdate = z.infer<typeof presenceSchema>;
+
+const typingSchema = z.object({
+  conversationId: z.string().min(1),
+  userId: z.string().min(1),
+}).passthrough();
+
+export type TypingUpdate = z.infer<typeof typingSchema>;
+
+export function presenceFromFrame(frame: ServerFrame): PresenceUpdate | undefined {
+  if (frame.type !== "PRESENCE_UPDATE") return undefined;
+  const parsed = presenceSchema.safeParse(frame.data);
+  return parsed.success ? parsed.data : undefined;
+}
+
+export function typingFromFrame(frame: ServerFrame): { active: boolean; conversationId: string; userId: string } | undefined {
+  if (frame.type !== "TYPING_START" && frame.type !== "TYPING_STOP") return undefined;
+  const parsed = typingSchema.safeParse(frame.data);
+  if (!parsed.success) return undefined;
+  return { active: frame.type === "TYPING_START", conversationId: parsed.data.conversationId, userId: parsed.data.userId };
+}
+
 export type SocketStatus = "offline" | "connecting" | "connected" | "reconnecting";
 
 export interface SocketHandlers {
@@ -50,6 +78,7 @@ export interface SocketHandlers {
 
 export interface ChatSocket {
   connect(url: string, accessToken: string, handlers: SocketHandlers, refreshToken?: () => Promise<string | undefined>): void;
+  send(frame: { type: string; conversationId?: string }): void;
   close(): void;
 }
 
@@ -57,6 +86,7 @@ export interface ChatSocket {
 export class NodeChatSocket implements ChatSocket {
   private socket: WebSocket | undefined;
   private timer: ReturnType<typeof setTimeout> | undefined;
+  private heartbeat: ReturnType<typeof setInterval> | undefined;
   private attempt = 0;
   private stopped = true;
   private url = "";
@@ -78,6 +108,12 @@ export class NodeChatSocket implements ChatSocket {
     this.refreshToken = refreshToken ?? (async () => this.token);
     this.handlers = handlers;
     this.open(false);
+  }
+
+  send(frame: { type: string; conversationId?: string }): void {
+    if (this.socket?.readyState === WebSocket.OPEN) {
+      this.socket.send(JSON.stringify(frame));
+    }
   }
 
   close(): void {
@@ -113,6 +149,11 @@ export class NodeChatSocket implements ChatSocket {
       this.attempt = 0;
       this.handlers.onStatus("connected", recovered);
       socket.send(JSON.stringify({ type: "PING" }));
+      this.heartbeat = setInterval(() => {
+        if (this.socket === socket && socket.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify({ type: "PING" }));
+        }
+      }, 25_000);
     });
     socket.on("message", (data: WebSocket.RawData) => {
       const frame = parseServerFrame(data.toString());
@@ -138,6 +179,8 @@ export class NodeChatSocket implements ChatSocket {
   private stopSocket(): void {
     if (this.timer) clearTimeout(this.timer);
     this.timer = undefined;
+    if (this.heartbeat) clearInterval(this.heartbeat);
+    this.heartbeat = undefined;
     const socket = this.socket;
     this.socket = undefined;
     socket?.removeAllListeners();

@@ -5,6 +5,8 @@ import com.devconnect.socialnetwork.dto.request.SendMessageRequest;
 import com.devconnect.socialnetwork.exception.ApiException;
 import com.devconnect.socialnetwork.exception.ErrorCode;
 import com.devconnect.socialnetwork.service.MessageService;
+import com.devconnect.socialnetwork.service.PresenceService;
+import com.devconnect.socialnetwork.service.TypingService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -23,11 +25,21 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
 
     private final MessageService messageService;
     private final WebSocketSessionRegistry registry;
+    private final PresenceService presenceService;
+    private final TypingService typingService;
     private final ObjectMapper objectMapper;
 
-    public ChatWebSocketHandler(MessageService messageService, WebSocketSessionRegistry registry, ObjectMapper objectMapper) {
+    public ChatWebSocketHandler(
+            MessageService messageService,
+            WebSocketSessionRegistry registry,
+            PresenceService presenceService,
+            TypingService typingService,
+            ObjectMapper objectMapper
+    ) {
         this.messageService = messageService;
         this.registry = registry;
+        this.presenceService = presenceService;
+        this.typingService = typingService;
         this.objectMapper = objectMapper;
     }
 
@@ -39,6 +51,7 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
             return;
         }
         registry.add(userId, session);
+        presenceService.connected(userId);
         send(session, frame("READY", Map.of("userId", userId)));
         messageService.deliverPending(userId);
     }
@@ -63,7 +76,12 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
         }
         try {
             switch (clientFrame.getType()) {
-                case "PING" -> send(session, frame("PONG", Map.of()));
+                case "PING" -> {
+                    registry.touch(session);
+                    send(session, frame("PONG", Map.of()));
+                }
+                case "TYPING_START" -> typingService.publish(userId, clientFrame.getConversationId(), true);
+                case "TYPING_STOP" -> typingService.publish(userId, clientFrame.getConversationId(), false);
                 case "SEND" -> messageService.send(userId, clientFrame.getConversationId(), new SendMessageRequest(
                         clientFrame.getCiphertext(),
                         clientFrame.getMessageType(),
@@ -85,6 +103,7 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
         String userId = userId(session);
         if (userId != null) {
             registry.remove(userId, session);
+            presenceService.disconnected(userId);
         }
     }
 

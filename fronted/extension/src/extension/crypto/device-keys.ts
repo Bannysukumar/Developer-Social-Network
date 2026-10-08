@@ -52,6 +52,16 @@ export function createDeviceMaterial(): DeviceMaterial {
   };
 }
 
+export function hasVerifiedSignedPreKey(device: {
+  algorithm: string;
+  identityPublicKey: string;
+  signedPreKey?: { publicKey: string; signature?: string | null } | null;
+}): boolean {
+  const signed = device.signedPreKey;
+  if (device.algorithm !== "Ed25519" || !signed?.signature) return false;
+  return verifySignedPreKey(device.identityPublicKey, signed.publicKey, signed.signature);
+}
+
 export function verifySignedPreKey(identityPublic: string, signedPublic: string, signature: string): boolean {
   try {
     return verify(

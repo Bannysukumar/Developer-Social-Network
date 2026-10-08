@@ -37,6 +37,8 @@ public class UserEntity {
     private Instant createdAt;
     private Instant updatedAt;
     private Instant lastLoginAt;
+    private Instant lastSeenAt;
+    private Boolean showActivityStatus;
 
     public String getId() {
         return id;
@@ -180,5 +182,21 @@ public class UserEntity {
 
     public void setLastLoginAt(Instant lastLoginAt) {
         this.lastLoginAt = lastLoginAt;
+    }
+
+    public Instant getLastSeenAt() {
+        return lastSeenAt;
+    }
+
+    public void setLastSeenAt(Instant lastSeenAt) {
+        this.lastSeenAt = lastSeenAt;
+    }
+
+    public Boolean getShowActivityStatus() {
+        return showActivityStatus;
+    }
+
+    public void setShowActivityStatus(Boolean showActivityStatus) {
+        this.showActivityStatus = showActivityStatus;
     }
 }

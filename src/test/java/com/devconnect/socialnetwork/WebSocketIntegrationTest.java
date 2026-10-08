@@ -79,7 +79,13 @@ class WebSocketIntegrationTest extends AbstractIntegrationTest {
                 {"type":"SEND","conversationId":"%s","ciphertext":"%s","messageType":"TEXT","clientMessageId":"ws-message-1"}
                 """.formatted(conversationId, ciphertext)));
 
-        String delivered = graceHandler.messages.poll(5, TimeUnit.SECONDS);
+        String delivered = null;
+        for (int attempt = 0; attempt < 6 && delivered == null; attempt++) {
+            String next = graceHandler.messages.poll(5, TimeUnit.SECONDS);
+            if (next != null && next.contains(ciphertext)) {
+                delivered = next;
+            }
+        }
         assertThat(delivered).contains(ciphertext);
         assertThat(delivered).doesNotContain("opaque-payload");
 

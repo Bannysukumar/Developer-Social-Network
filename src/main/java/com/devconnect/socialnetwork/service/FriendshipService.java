@@ -90,7 +90,7 @@ public class FriendshipService {
         List<UserSummaryResponse> summaries = new ArrayList<>();
         for (String friendId : friendIds) {
             users.stream().filter(user -> user.getId().equals(friendId)).findFirst()
-                    .ifPresent(user -> summaries.add(userMapper.toSummary(user, RelationshipView.FRIENDS)));
+                    .ifPresent(user -> summaries.add(userMapper.toSummary(user, RelationshipView.FRIENDS, userId)));
         }
         return Paging.map(relationships, summaries);
     }

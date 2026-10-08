@@ -31,5 +31,8 @@ describe("Webview security shell", () => {
     expect(html).toContain('"phase":"checking"');
     expect(html).not.toMatch(/<script[^>]+src=/i);
     expect(html).not.toMatch(/https?:\/\//i);
+    expect(html).toContain("← Messages");
+    expect(html).toContain("Start the conversation by saying hello.");
+    expect(html).not.toContain("No messages yet. Say hello.");
   });
 });
