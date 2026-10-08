@@ -5,6 +5,7 @@ import com.devconnect.socialnetwork.domain.RelationshipView;
 import com.devconnect.socialnetwork.dto.response.PresenceView;
 import com.devconnect.socialnetwork.entity.RelationshipEntity;
 import com.devconnect.socialnetwork.entity.UserEntity;
+import com.devconnect.socialnetwork.repository.BlockRepository;
 import com.devconnect.socialnetwork.repository.RelationshipRepository;
 import com.devconnect.socialnetwork.repository.UserRepository;
 import com.devconnect.socialnetwork.websocket.RealtimePublisher;
@@ -40,7 +41,7 @@ public class PresenceService {
     private final WebSocketSessionRegistry registry;
     private final RealtimePublisher publisher;
     private final RelationshipRepository relationshipRepository;
-    private final BlockService blockService;
+    private final BlockRepository blockRepository;
     private final UserRepository userRepository;
     private final Clock clock;
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(runnable -> {
@@ -54,14 +55,14 @@ public class PresenceService {
             WebSocketSessionRegistry registry,
             RealtimePublisher publisher,
             RelationshipRepository relationshipRepository,
-            BlockService blockService,
+            BlockRepository blockRepository,
             UserRepository userRepository,
             Clock clock
     ) {
         this.registry = registry;
         this.publisher = publisher;
         this.relationshipRepository = relationshipRepository;
-        this.blockService = blockService;
+        this.blockRepository = blockRepository;
         this.userRepository = userRepository;
         this.clock = clock;
         scheduler.scheduleAtFixedRate(this::closeStaleSockets, 20, 20, TimeUnit.SECONDS);
@@ -90,7 +91,7 @@ public class PresenceService {
         }
         boolean self = viewerId.equals(target.getId());
         if (!self && !PresencePolicy.canSee(
-                blockService.eitherBlocked(viewerId, target.getId()),
+                eitherBlocked(viewerId, target.getId()),
                 PresencePolicy.activityVisible(target.getShowActivityStatus()),
                 target.getAccountType() == null ? AccountType.PUBLIC : target.getAccountType(),
                 relationship
@@ -136,7 +137,7 @@ public class PresenceService {
             if (sent >= FRIEND_LIMIT) {
                 break;
             }
-            if (!blockService.eitherBlocked(userId, friendId)) {
+            if (!eitherBlocked(userId, friendId)) {
                 publisher.publish(friendId, "PRESENCE_UPDATE", payload);
                 sent += 1;
             }
@@ -156,12 +157,17 @@ public class PresenceService {
             if (friend == null || !PresencePolicy.activityVisible(friend.getShowActivityStatus())) {
                 continue;
             }
-            if (blockService.eitherBlocked(userId, friendId)) {
+            if (eitherBlocked(userId, friendId)) {
                 continue;
             }
             publisher.publish(userId, "PRESENCE_UPDATE", payload(friendId, "ONLINE", null));
             sent += 1;
         }
+    }
+
+    private boolean eitherBlocked(String firstUserId, String secondUserId) {
+        return blockRepository.existsByBlockerIdAndBlockedId(firstUserId, secondUserId)
+                || blockRepository.existsByBlockerIdAndBlockedId(secondUserId, firstUserId);
     }
 
     private List<String> friendIds(String userId) {
