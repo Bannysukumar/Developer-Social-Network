@@ -11,8 +11,11 @@ RUN apt-get update \
     && useradd --system --uid 10001 --create-home appuser
 WORKDIR /app
 COPY --from=build /src/target/social-network-backend-*.jar /app/app.jar
-USER 10001
+COPY deploy/backend-entrypoint.sh /entrypoint.sh
+RUN chmod 755 /entrypoint.sh \
+    && mkdir -p /app/uploads \
+    && chown appuser:appuser /app/uploads
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=5 \
     CMD curl -fsS http://127.0.0.1:8080/actuator/health || exit 1
-ENTRYPOINT ["java", "-jar", "/app/app.jar"]
+ENTRYPOINT ["/entrypoint.sh"]

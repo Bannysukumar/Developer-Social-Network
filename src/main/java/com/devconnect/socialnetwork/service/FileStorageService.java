@@ -43,7 +43,7 @@ public class FileStorageService {
             Files.createDirectories(root);
             Files.write(target, bytes);
         } catch (IOException ex) {
-            throw new IllegalStateException("Image could not be stored");
+            throw new IllegalStateException("Image could not be stored", ex);
         }
         StoredFileEntity entity = new StoredFileEntity();
         entity.setId(id);

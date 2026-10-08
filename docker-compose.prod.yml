@@ -27,6 +27,8 @@ services:
         condition: service_healthy
     ports:
       - "127.0.0.1:8080:8080"
+    volumes:
+      - uploads_data:/app/uploads
     networks:
       - social-internal
     healthcheck:
@@ -57,3 +59,4 @@ networks:
 
 volumes:
   mongodb_data:
+  uploads_data:
