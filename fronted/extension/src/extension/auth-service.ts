@@ -37,6 +37,7 @@ export interface AuthServiceOptions {
 
 export class AuthService {
   private readonly session: SessionStore;
+  private readonly peerNames = new Map<string, { displayName: string; username: string }>();
   private client: ApiClient;
   private authApi: AuthApi;
   private usersApi: UsersApi;
@@ -80,6 +81,20 @@ export class AuthService {
     return this.session.getAccessToken();
   }
 
+  /** Returns a token that is still valid, refreshing it when it is close to expiry. */
+  async ensureFreshAccessToken(): Promise<string | undefined> {
+    const [token, expiresAt] = await Promise.all([
+      this.session.getAccessToken(),
+      this.session.getAccessTokenExpiresAt(),
+    ]);
+    if (!token) return undefined;
+    const expiresMs = expiresAt ? Date.parse(expiresAt) : Number.NaN;
+    if (!Number.isNaN(expiresMs) && expiresMs - Date.now() < 60_000) {
+      return this.refreshAccessToken();
+    }
+    return token;
+  }
+
   reloadConfig(config: ApiConfig): void {
     this.config = config;
     this.rebuildApis();
@@ -108,6 +123,7 @@ export class AuthService {
   async changePassword(currentPassword: string, newPassword: string): Promise<void> {
     await this.authApi.changePassword(currentPassword, newPassword);
     await this.session.clear();
+    this.peerNames.clear();
   }
 
   async resendVerification(): Promise<void> {
@@ -140,6 +156,7 @@ export class AuthService {
       // Clear local session even if logout fails.
     }
     await this.session.clear();
+    this.peerNames.clear();
   }
 
   async refreshProfile(): Promise<UserProfileDto> {
@@ -152,6 +169,35 @@ export class AuthService {
     const user = await this.usersApi.updateMe(input);
     await this.session.updateUser(user);
     return user;
+  }
+
+  async uploadAvatar(bytes: Uint8Array, contentType: "image/jpeg" | "image/png" | "image/webp"): Promise<UserProfileDto> {
+    const user = await this.usersApi.uploadAvatar(bytes, contentType);
+    await this.session.updateUser(user);
+    return user;
+  }
+
+  async removeAvatar(): Promise<UserProfileDto> {
+    return this.updateProfile({ clearProfileImage: true });
+  }
+
+  blockedUsers(): Promise<UserSummaryDto[]> {
+    return this.usersApi.blocked().then((items) => [...items]);
+  }
+
+  async avatarDataUrl(fileId: string): Promise<string | undefined> {
+    const token = await this.ensureFreshAccessToken();
+    if (!token) return undefined;
+    const response = await fetch(`${this.config.baseUrl}/media/${encodeURIComponent(fileId)}`, {
+      headers: { Authorization: `Bearer ${token}`, Accept: "image/*" },
+      cache: "no-store",
+    });
+    if (!response.ok) return undefined;
+    const type = response.headers.get("content-type") ?? "";
+    if (!type.startsWith("image/")) return undefined;
+    const bytes = Buffer.from(await response.arrayBuffer());
+    if (bytes.length === 0 || bytes.length > 2_097_152) return undefined;
+    return `data:${type};base64,${bytes.toString("base64")}`;
   }
 
   searchUsers(query: string): Promise<UserSummaryDto[]> {
@@ -195,8 +241,29 @@ export class AuthService {
     return this.usersApi.block(userId);
   }
 
-  listConversations(): Promise<ConversationDto[]> {
-    return this.conversationsApi.list().then((page) => [...page.items]);
+  blockStatus(userId: string): Promise<{ blockedByMe: boolean; blockedMe: boolean }> {
+    return this.usersApi.blockStatus(userId);
+  }
+
+  async listConversations(): Promise<ConversationDto[]> {
+    const page = await this.conversationsApi.list();
+    const selfId = this.getUser()?.id;
+    return Promise.all(page.items.map((conversation) => this.withPeerName(conversation, selfId)));
+  }
+
+  private async withPeerName(conversation: ConversationDto, selfId: string | undefined): Promise<ConversationDto> {
+    const otherId = conversation.participantIds.find((id) => id !== selfId);
+    if (!otherId) return conversation;
+    const cached = this.peerNames.get(otherId);
+    if (cached) return { ...conversation, peerDisplayName: cached.displayName, peerUsername: cached.username };
+    try {
+      const profile = await this.usersApi.get(otherId);
+      const peer = { displayName: profile.displayName, username: profile.username };
+      this.peerNames.set(otherId, peer);
+      return { ...conversation, peerDisplayName: peer.displayName, peerUsername: peer.username };
+    } catch {
+      return conversation;
+    }
   }
 
   async openConversation(options: {
@@ -302,7 +369,7 @@ export class AuthService {
     if (error instanceof Error && error.message.includes("must use HTTPS")) {
       return error.message;
     }
-    if (error instanceof Error && /DevConnect API|Invalid user id|encryption key|key signature|not registered/.test(error.message)) {
+    if (error instanceof Error && /DevConnect API|Invalid user id|encryption key|key signature|not registered|Profile picture|You can't interact/.test(error.message)) {
       return error.message;
     }
     return "Something went wrong. Try again.";

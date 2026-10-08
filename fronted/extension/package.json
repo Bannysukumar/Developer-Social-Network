@@ -3,7 +3,7 @@
   "displayName": "DevConnect",
   "description": "A developer community inside Visual Studio Code.",
   "publisher": "Bannysukumar2255",
-  "version": "0.4.3",
+  "version": "0.4.6",
   "private": true,
   "engines": {
     "vscode": "^1.85.0"
@@ -12,8 +12,15 @@
     "Other"
   ],
   "activationEvents": [
+    "onStartupFinished",
     "onView:devconnect.home",
-    "onCommand:devconnect.open"
+    "onCommand:devconnect.open",
+    "onCommand:devconnect.openMessages",
+    "onCommand:devconnect.openNotifications",
+    "onCommand:devconnect.openFriends",
+    "onCommand:devconnect.openProfile",
+    "onCommand:devconnect.openSettings",
+    "onCommand:devconnect.markNotificationsRead"
   ],
   "contributes": {
     "viewsContainers": {
@@ -38,6 +45,30 @@
       {
         "command": "devconnect.open",
         "title": "DevConnect: Open"
+      },
+      {
+        "command": "devconnect.openMessages",
+        "title": "DevConnect: Open Messages"
+      },
+      {
+        "command": "devconnect.openNotifications",
+        "title": "DevConnect: Open Notifications"
+      },
+      {
+        "command": "devconnect.openFriends",
+        "title": "DevConnect: Open Friends"
+      },
+      {
+        "command": "devconnect.openProfile",
+        "title": "DevConnect: Open Profile"
+      },
+      {
+        "command": "devconnect.openSettings",
+        "title": "DevConnect: Settings"
+      },
+      {
+        "command": "devconnect.markNotificationsRead",
+        "title": "DevConnect: Mark Notifications as Read"
       }
     ],
     "configuration": {
@@ -52,6 +83,21 @@
           "type": "boolean",
           "default": false,
           "description": "Allow a remote http:// API base URL. Leave this off for the HTTPS API."
+        },
+        "devconnect.notifyMessages": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show a VS Code notification when a message arrives and that chat is not open."
+        },
+        "devconnect.notifyFriendRequests": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show a VS Code notification for a new friend request."
+        },
+        "devconnect.notifyFriendAccepted": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show a VS Code notification when someone accepts your friend request."
         },
         "devconnect.requestTimeoutMs": {
           "type": "number",

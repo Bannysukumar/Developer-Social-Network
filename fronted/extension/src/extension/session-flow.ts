@@ -30,6 +30,10 @@ export class SessionFlow {
   private toast: string | null = null;
   private toastSeq = 0;
   private devices: HostState["devices"] = [];
+  private blockedUsers: HostState["blockedUsers"] = [];
+  private avatars: HostState["avatars"] = {};
+  private avatarMisses = new Set<string>();
+  private messageLock: HostState["messageLock"] = "none";
   constructor(
     private readonly auth: AuthService,
     private readonly onChange: () => void,
@@ -52,7 +56,7 @@ export class SessionFlow {
       ...emptyHostState(),
       phase: this.phase,
       screen: this.screen,
-      canGoBack: this.history.length > 0 && this.phase === "ready",
+      canGoBack: this.screen === "user" && this.history.length > 0 && this.phase === "ready",
       authenticated: this.auth.isAuthenticated(),
       insecureHttp: config.allowInsecureHttp && config.baseUrl.startsWith("http://"),
       e2eeEnabled: this.auth.hasDeviceKeys(),
@@ -75,6 +79,9 @@ export class SessionFlow {
       toast: this.toast,
       toastSeq: this.toastSeq,
       devices: this.devices,
+      blockedUsers: this.blockedUsers,
+      avatars: this.avatars,
+      messageLock: this.messageLock,
     };
   }
 
@@ -84,6 +91,7 @@ export class SessionFlow {
 
   setConnection(status: SocketStatus, recovered: boolean): void {
     const previous = this.connection;
+    if (previous === status && !recovered) return;
     this.connection = status;
     if (status === "connected" && recovered && previous !== "connected") {
       this.toast = "Connection restored";
@@ -144,9 +152,10 @@ export class SessionFlow {
       authenticated: this.auth.isAuthenticated(),
       checking: this.phase === "checking",
     });
-    if (recordHistory && this.phase === "ready" && next !== this.screen && this.screen !== "splash") {
-      this.history.push(this.screen);
+    if (recordHistory && next === "user" && this.phase === "ready" && this.screen !== "user") {
+      this.history = [this.screen];
     }
+    if (next !== "user") this.history = [];
     this.screen = next;
   }
 
@@ -167,6 +176,10 @@ export class SessionFlow {
     this.seenMessageIds.clear();
     this.toast = null;
     this.devices = [];
+    this.blockedUsers = [];
+    this.avatars = {};
+    this.avatarMisses.clear();
+    this.messageLock = "none";
   }
 
   async bootstrap(): Promise<void> {
@@ -205,6 +218,11 @@ export class SessionFlow {
     this.conversations = conversations;
     this.notifications = notes.items;
     this.unreadNotifications = notes.unreadCount;
+    try {
+      this.blockedUsers = await this.auth.blockedUsers();
+    } catch {
+      this.blockedUsers = [];
+    }
     await this.auth.ensureDeviceKeys();
   }
 
@@ -228,15 +246,54 @@ export class SessionFlow {
       this.pushState();
       return;
     }
+    if (message.type === "closeThread") {
+      this.activeConversationId = null;
+      this.messages = [];
+      this.messageLock = "none";
+      this.error = null;
+      this.pushState();
+      return;
+    }
     if (message.type === "navigate") {
       this.error = null;
+      if (message.destination === "messages" && this.screen === "messages") this.activeConversationId = null;
       this.show(message.destination, true);
       this.pushState();
-      if (this.auth.isAuthenticated()) await this.refreshFor(this.screen);
+      if (this.auth.isAuthenticated() && message.destination === "settings") {
+        await this.run({ version: 1, type: "loadDevices" });
+      }
+      return;
+    }
+    if (message.type === "retry") {
+      await this.refreshFor(this.screen);
       return;
     }
 
     await this.run(message);
+  }
+
+  async focusTarget(target: { screen: ScreenId; conversationId?: string }): Promise<void> {
+    if (!this.auth.isAuthenticated()) {
+      this.phase = "ready";
+      this.show("login", false);
+      this.pushState();
+      return;
+    }
+    if (this.phase === "checking") return;
+    if (target.conversationId) {
+      const opened = await this.auth.openConversation({ conversationId: target.conversationId });
+      this.activeConversationId = opened.conversation.id;
+      this.messages = opened.messages;
+      for (const item of opened.messages) this.seenMessageIds.add(item.id);
+      delete this.unreadByConversation[opened.conversation.id];
+      this.unreadMessages = Object.values(this.unreadByConversation).reduce((sum, count) => sum + count, 0);
+      this.conversations = await this.auth.listConversations();
+      await this.syncMessageLock(opened.conversation.participantIds);
+      this.show("messages", false);
+    } else {
+      this.show(target.screen, false);
+    }
+    this.pushState();
   }
 
   private async refreshFor(screen: ScreenId): Promise<void> {
@@ -314,13 +371,32 @@ export class SessionFlow {
           await this.auth.resendVerification();
           this.notice = "Verification email requested.";
           break;
-        case "updateProfile":
+        case "updateProfile": {
+          const previous = this.auth.getUser()?.accountType;
           await this.auth.updateProfile({
             displayName: message.displayName,
             bio: message.bio,
             accountType: message.accountType,
+            clearProfileImage: message.clearProfileImage,
           });
-          this.notice = "Profile saved.";
+          this.notice = previous && message.accountType && previous !== message.accountType
+            ? `Account is now ${message.accountType === "PRIVATE" ? "private" : "public"}.`
+            : "Profile saved.";
+          break;
+        }
+        case "uploadAvatar": {
+          const bytes = Buffer.from(message.dataBase64, "base64");
+          if (bytes.length === 0 || bytes.length > 2_097_152) {
+            throw new Error("Profile picture is too large.");
+          }
+          await this.auth.uploadAvatar(bytes, message.contentType);
+          this.avatarMisses.clear();
+          this.notice = "Profile picture updated.";
+          break;
+        }
+        case "removeAvatar":
+          await this.auth.removeAvatar();
+          this.notice = "Profile picture removed.";
           break;
         case "searchUsers":
           this.searchResults = await this.auth.searchUsers(message.query);
@@ -361,11 +437,15 @@ export class SessionFlow {
           await this.auth.blockUser(message.userId);
           this.notice = "User blocked.";
           this.searchResults = this.searchResults.filter((user) => user.id !== message.userId);
+          this.blockedUsers = await this.auth.blockedUsers();
+          if (this.peerId() === message.userId) this.messageLock = "blocked-by-me";
           await this.refreshSocialAndUser(message.userId);
           break;
         case "unblockUser":
           await this.auth.unblockUser(message.userId);
           this.notice = "User unblocked.";
+          this.blockedUsers = this.blockedUsers.filter((user) => user.id !== message.userId);
+          if (this.peerId() === message.userId) await this.syncMessageLock();
           await this.refreshSocialAndUser(message.userId);
           break;
         case "loadConversations":
@@ -382,13 +462,30 @@ export class SessionFlow {
           delete this.unreadByConversation[opened.conversation.id];
           this.unreadMessages = Object.values(this.unreadByConversation).reduce((sum, count) => sum + count, 0);
           this.conversations = await this.auth.listConversations();
+          await this.syncMessageLock(opened.conversation.participantIds);
           this.show("messages", this.screen !== "messages");
           break;
         }
         case "sendMessage": {
-          const sent = await this.auth.sendMessage(message.conversationId, message.text);
-          this.messages = [sent, ...this.messages];
-          this.activeConversationId = message.conversationId;
+          if (this.messageLock !== "none") {
+            this.error = this.messageLock === "blocked-by-me"
+              ? "You blocked this user."
+              : "You can't message this user.";
+            break;
+          }
+          try {
+            const sent = await this.auth.sendMessage(message.conversationId, message.text);
+            this.messages = [sent, ...this.messages];
+            this.activeConversationId = message.conversationId;
+          } catch (error) {
+            const text = this.auth.userFacingError(error);
+            if (/can't interact|Only friends can exchange messages/.test(text)) {
+              const lock = await this.syncMessageLock();
+              this.error = lock === "blocked-me" ? "You can't message this user." : text;
+              break;
+            }
+            throw error;
+          }
           break;
         }
         case "loadNotifications": {
@@ -407,9 +504,19 @@ export class SessionFlow {
             const opened = await this.auth.openConversation({ conversationId: note.referenceId });
             this.activeConversationId = opened.conversation.id;
             this.messages = opened.messages;
+            await this.syncMessageLock(opened.conversation.participantIds);
             this.show("messages", true);
           } else if (note) {
             this.show(notificationDestination(note.type), true);
+            if (note.type === "FRIEND_REQUEST") {
+              const social = await this.auth.loadSocial();
+              this.friends = social.friends;
+              this.incomingRequests = social.incoming;
+              this.outgoingRequests = social.outgoing;
+              if (note.referenceId && !social.incoming.some((request) => request.id === note.referenceId)) {
+                this.notice = "This request is no longer available.";
+              }
+            }
           }
           break;
         }
@@ -430,6 +537,7 @@ export class SessionFlow {
         }
         case "loadDevices":
           this.devices = await this.auth.listDevices();
+          this.blockedUsers = await this.auth.blockedUsers();
           break;
         case "revokeDevice":
           await this.auth.revokeDevice(message.deviceId);
@@ -443,7 +551,57 @@ export class SessionFlow {
       this.error = this.auth.userFacingError(error);
     } finally {
       this.busy = false;
+      if (this.auth.isAuthenticated()) await this.warmAvatars();
       this.pushState();
+    }
+  }
+
+  private peerId(participantIds?: readonly string[]): string | undefined {
+    const ids = participantIds
+      ?? this.conversations.find((conversation) => conversation.id === this.activeConversationId)?.participantIds;
+    const selfId = this.auth.getUser()?.id;
+    return ids?.find((id) => id !== selfId);
+  }
+
+  private async syncMessageLock(participantIds?: readonly string[]): Promise<HostState["messageLock"]> {
+    const otherId = this.peerId(participantIds);
+    if (!otherId) {
+      this.messageLock = "none";
+      return this.messageLock;
+    }
+    if (this.blockedUsers.some((user) => user.id === otherId)) {
+      this.messageLock = "blocked-by-me";
+      return this.messageLock;
+    }
+    try {
+      const status = await this.auth.blockStatus(otherId);
+      this.messageLock = status.blockedByMe ? "blocked-by-me" : status.blockedMe ? "blocked-me" : "none";
+    } catch {
+      this.messageLock = "none";
+    }
+    return this.messageLock;
+  }
+
+  private async warmAvatars(): Promise<void> {
+    const urls = [
+      this.auth.getUser()?.profileImageUrl,
+      this.selectedUser?.profileImageUrl,
+      ...this.searchResults.map((user) => user.profileImageUrl),
+      ...this.friends.map((user) => user.profileImageUrl),
+      ...this.blockedUsers.map((user) => user.profileImageUrl),
+      ...this.incomingRequests.map((request) => request.counterpart.profileImageUrl),
+      ...this.outgoingRequests.map((request) => request.counterpart.profileImageUrl),
+    ];
+    for (const url of urls) {
+      const id = url?.split("/").filter(Boolean).pop();
+      if (!id || id.includes("..") || this.avatars[id] || this.avatarMisses.has(id)) continue;
+      try {
+        const data = await this.auth.avatarDataUrl(id);
+        if (data) this.avatars = { ...this.avatars, [id]: data };
+        else this.avatarMisses.add(id);
+      } catch {
+        this.avatarMisses.add(id);
+      }
     }
   }
 

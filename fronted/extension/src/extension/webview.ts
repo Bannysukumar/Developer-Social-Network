@@ -38,6 +38,9 @@ export interface HostState {
   readonly toast: string | null;
   readonly toastSeq: number;
   readonly devices: readonly DeviceDto[];
+  readonly blockedUsers: readonly UserSummaryDto[];
+  readonly avatars: Readonly<Record<string, string>>;
+  readonly messageLock: "none" | "blocked-by-me" | "blocked-me";
 }
 
 export function emptyHostState(): HostState {
@@ -67,6 +70,9 @@ export function emptyHostState(): HostState {
     toast: null,
     toastSeq: 0,
     devices: [],
+    blockedUsers: [],
+    avatars: {},
+    messageLock: "none",
   };
 }
 
@@ -77,7 +83,7 @@ export function renderWebview(webview: Webview, state: HostState): string {
     "default-src 'none'",
     `style-src 'nonce-${nonce}'`,
     `script-src 'nonce-${nonce}'`,
-    `img-src ${webview.cspSource}`,
+    `img-src ${webview.cspSource} data:`,
     "font-src 'none'",
     "connect-src 'none'",
     "frame-src 'none'",
@@ -88,14 +94,14 @@ export function renderWebview(webview: Webview, state: HostState): string {
 
   return `<!DOCTYPE html>
 <html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta http-equiv="Content-Security-Policy" content="${csp}">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>DevConnect</title>
-<style nonce="${nonce}">
-  :root { color-scheme: light dark; }
-  * { box-sizing: border-box; }
+  <head>
+    <meta charset="UTF-8">
+    <meta http-equiv="Content-Security-Policy" content="${csp}">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DevConnect</title>
+    <style nonce="${nonce}">
+      :root { color-scheme: light dark; }
+      * { box-sizing: border-box; }
   body { margin: 0; color: var(--vscode-foreground); background: var(--vscode-sideBar-background); font-family: var(--vscode-font-family); font-size: var(--vscode-font-size); }
   button, input, textarea, select { font: inherit; color: inherit; }
   button { cursor: pointer; }
@@ -109,10 +115,16 @@ export function renderWebview(webview: Webview, state: HostState): string {
   }
   .app { min-height: 100vh; display: flex; flex-direction: column; }
   .top { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--vscode-panel-border); }
-  .mark { width: 28px; height: 28px; display: grid; place-items: center; border: 1px solid var(--vscode-focusBorder); border-radius: 6px; color: var(--vscode-focusBorder); font-weight: 700; }
+  .mark { width: 22px; height: 22px; display: grid; place-items: center; color: var(--vscode-foreground); }
+  .mark svg { width: 22px; height: 22px; display: block; }
   .brand { font-weight: 650; }
   .back, .nav-btn, .btn { min-height: 28px; border: 1px solid var(--vscode-panel-border); border-radius: 4px; background: transparent; padding: 0 8px; }
   .btn.primary { border-color: transparent; background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
+  .btn.danger { color: var(--vscode-errorForeground); }
+  .avatar-img { width: 36px; height: 36px; border-radius: 50%; object-fit: cover; background: var(--vscode-badge-background); }
+  .avatar.lg, .avatar-img.lg { width: 64px; height: 64px; font-size: 22px; }
+  .file-btn { position: relative; overflow: hidden; display: inline-flex; align-items: center; }
+  .file-btn input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
   nav { display: flex; gap: 4px; overflow-x: auto; padding: 8px; border-bottom: 1px solid var(--vscode-panel-border); }
   .nav-btn[aria-current="page"] { background: var(--vscode-list-activeSelectionBackground); color: var(--vscode-list-activeSelectionForeground); border-color: transparent; }
   main { padding: 12px; display: grid; gap: 10px; }
@@ -132,28 +144,34 @@ export function renderWebview(webview: Webview, state: HostState): string {
   .msg.mine { background: color-mix(in srgb, var(--vscode-button-background) 24%, transparent); }
   .splash { min-height: 70vh; display: grid; place-items: center; text-align: center; gap: 8px; }
   .spinner { width: 28px; height: 28px; margin: 8px auto 0; border: 2px solid var(--vscode-panel-border); border-top-color: var(--vscode-focusBorder); border-radius: 50%; }
-  @media (prefers-reduced-motion: no-preference) {
+      @media (prefers-reduced-motion: no-preference) {
     .spinner { animation: spin 800ms linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
   }
   .badge { min-width: 16px; padding: 0 4px; border-radius: 8px; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); font-size: 10px; }
-  .linkish { background: none; border: 0; padding: 0; color: var(--vscode-textLink-foreground); text-align: left; }
+  .person, .note { display: flex; gap: 10px; align-items: center; width: 100%; text-align: left; background: transparent; border: 0; border-radius: 6px; padding: 8px; color: inherit; }
+  .person:hover, .note:hover { background: var(--vscode-list-hoverBackground); }
+  .avatar { width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; flex: none; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); font-weight: 650; }
+  .person-copy, .note-copy { display: grid; gap: 2px; min-width: 0; }
+  .note.unread { background: color-mix(in srgb, var(--vscode-list-inactiveSelectionBackground, var(--vscode-list-hoverBackground)) 70%, transparent); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--vscode-activityBarBadge-background, var(--vscode-badge-background)); }
+  .thread-head { display: flex; align-items: center; gap: 8px; }
   .toast { position: sticky; bottom: 8px; margin: 8px 12px; padding: 8px 10px; border-radius: 6px; background: var(--vscode-notifications-background, var(--vscode-editorWidget-background)); color: var(--vscode-notifications-foreground, var(--vscode-foreground)); border: 1px solid var(--vscode-notifications-border, var(--vscode-panel-border)); }
   .status { margin-left: auto; font-size: 11px; color: var(--vscode-descriptionForeground); }
   #message-list { max-height: 280px; overflow: auto; display: flex; flex-direction: column; gap: 6px; }
   .msg.mine { margin-left: 18%; }
   .msg.theirs { margin-right: 18%; }
   .skel { height: 12px; border-radius: 4px; background: color-mix(in srgb, var(--vscode-descriptionForeground) 25%, transparent); }
-</style>
-</head>
-<body>
+    </style>
+  </head>
+  <body>
 <div class="app">
   <header class="top">
     <button class="back" id="back-btn" type="button" hidden>Back</button>
-    <div class="mark" aria-hidden="true">d</div>
+    <div class="mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M9.15 3.9 2.9 12l6.25 8.1 1.62-1.25L5.55 12l5.22-6.85L9.15 3.9Zm5.7 0-1.62 1.25L18.45 12l-5.22 6.85 1.62 1.25L21.1 12 14.85 3.9ZM11 9.15h2v5.7h-2v-5.7Z"/></svg></div>
     <div class="brand">DevConnect</div>
     <span class="status" id="live-status" hidden>Reconnecting…</span>
-  </header>
+      </header>
   <nav id="app-nav" aria-label="DevConnect" hidden>
     <button class="nav-btn" type="button" data-go="home">Home</button>
     <button class="nav-btn" type="button" data-go="search">Search</button>
@@ -162,14 +180,15 @@ export function renderWebview(webview: Webview, state: HostState): string {
     <button class="nav-btn" type="button" data-go="notifications">Alerts<span class="badge" id="badge" hidden>0</span></button>
     <button class="nav-btn" type="button" data-go="profile">Profile</button>
     <button class="nav-btn" type="button" data-go="settings">Settings</button>
-  </nav>
+      </nav>
   <main>
     <p class="banner error" id="error" hidden></p>
+    <button class="btn" type="button" id="retry" hidden>Try again</button>
     <p class="banner notice" id="notice" hidden></p>
 
     <section data-screen="splash" class="splash">
       <div>
-        <div class="mark" aria-hidden="true">d</div>
+        <div class="mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M9.15 3.9 2.9 12l6.25 8.1 1.62-1.25L5.55 12l5.22-6.85L9.15 3.9Zm5.7 0-1.62 1.25L18.45 12l-5.22 6.85 1.62 1.25L21.1 12 14.85 3.9ZM11 9.15h2v5.7h-2v-5.7Z"/></svg></div>
         <h1>DevConnect</h1>
         <p class="muted">Connect. Collaborate. Code.</p>
         <div class="spinner" role="status" aria-label="Checking session"></div>
@@ -229,14 +248,6 @@ export function renderWebview(webview: Webview, state: HostState): string {
       <h1 id="home-title">Home</h1>
       <p class="muted" id="home-copy"></p>
       <div class="card" id="home-activity"></div>
-      <div class="row">
-        <button class="btn" type="button" data-go="search">Search</button>
-        <button class="btn" type="button" data-go="friends">Friends</button>
-        <button class="btn" type="button" data-go="messages">Messages</button>
-        <button class="btn" type="button" data-go="notifications">Notifications</button>
-        <button class="btn" type="button" data-go="profile">Profile</button>
-        <button class="btn" type="button" data-go="settings">Settings</button>
-      </div>
     </section>
 
     <section data-screen="search" class="stack" hidden>
@@ -249,6 +260,7 @@ export function renderWebview(webview: Webview, state: HostState): string {
     </section>
 
     <section data-screen="user" class="stack" hidden>
+      <div id="user-avatar"></div>
       <h1 id="user-name">Profile</h1>
       <p class="muted" id="user-meta"></p>
       <p class="muted" id="user-bio"></p>
@@ -257,7 +269,6 @@ export function renderWebview(webview: Webview, state: HostState): string {
 
     <section data-screen="friends" class="stack" hidden>
       <h1>Friends</h1>
-      <button class="btn" type="button" id="reload-social">Refresh</button>
       <p class="muted">Incoming requests</p>
       <div id="incoming-list" class="stack"></div>
       <p class="muted">Friends</p>
@@ -267,13 +278,22 @@ export function renderWebview(webview: Webview, state: HostState): string {
     </section>
 
     <section data-screen="messages" class="stack" hidden>
-      <h1>Messages</h1>
-      <p class="muted" id="crypto-note"></p>
-      <div id="chat-list" class="stack"></div>
+      <div id="inbox" class="stack">
+        <h1>Messages</h1>
+        <p class="muted" id="crypto-note"></p>
+        <div id="chat-list" class="stack"></div>
+      </div>
       <div id="thread" class="stack" hidden>
-        <p class="muted" id="thread-title"></p>
+        <div class="thread-head">
+          <button class="btn" type="button" id="thread-back">Messages</button>
+          <div>
+            <strong id="thread-name">Chat</strong>
+            <div class="muted" id="thread-user"></div>
+          </div>
+        </div>
         <div id="message-list"></div>
         <button class="btn" type="button" id="jump-latest" hidden>New messages</button>
+        <p class="muted" id="thread-block" hidden>You blocked this user.</p>
         <form id="message-form" class="stack">
           <label>Message<textarea name="text" required maxlength="4000"></textarea></label>
           <button class="btn primary" type="submit">Send</button>
@@ -284,7 +304,6 @@ export function renderWebview(webview: Webview, state: HostState): string {
     <section data-screen="notifications" class="stack" hidden>
       <h1>Notifications</h1>
       <div class="row">
-        <button class="btn" type="button" id="reload-notes">Refresh</button>
         <button class="btn" type="button" id="read-all">Mark all read</button>
       </div>
       <div id="note-list" class="stack"></div>
@@ -292,14 +311,18 @@ export function renderWebview(webview: Webview, state: HostState): string {
 
     <section data-screen="profile" class="stack" hidden>
       <h1>My profile</h1>
+      <div id="me-avatar"></div>
       <p class="muted" id="me-line"></p>
+      <div class="row">
+        <label class="btn file-btn">Change photo<input id="avatar-file" type="file" accept="image/jpeg,image/png,image/webp"></label>
+        <button class="btn" type="button" id="remove-avatar">Remove photo</button>
+      </div>
       <form id="profile-form" class="stack">
         <label>Display name<input name="displayName" required maxlength="50"></label>
         <label>Bio<textarea name="bio" maxlength="500"></textarea></label>
-        <label>Privacy<select name="accountType"><option value="PUBLIC">PUBLIC</option><option value="PRIVATE">PRIVATE</option></select></label>
+        <label>Account privacy<select name="accountType"><option value="PUBLIC">Public</option><option value="PRIVATE">Private</option></select></label>
         <button class="btn primary" type="submit">Save profile</button>
       </form>
-      <button class="btn" type="button" id="reload-me">Reload</button>
       <button class="btn" type="button" id="resend-verify">Resend verification email</button>
     </section>
 
@@ -307,6 +330,8 @@ export function renderWebview(webview: Webview, state: HostState): string {
       <h1>Settings</h1>
       <p class="muted">Account, privacy, security, and devices.</p>
       <button class="btn" type="button" data-go="profile">Edit profile and privacy</button>
+      <h2>Blocked accounts</h2>
+      <div id="blocked-list" class="stack"></div>
       <form id="password-form" class="stack">
         <p class="muted">Security · change password signs you out on every device.</p>
         <label>Current password<input name="currentPassword" type="password" required maxlength="128"></label>
@@ -314,16 +339,15 @@ export function renderWebview(webview: Webview, state: HostState): string {
         <button class="btn primary" type="submit">Change password</button>
       </form>
       <p class="muted">Devices</p>
-      <button class="btn" type="button" id="reload-devices">Refresh devices</button>
       <div id="device-list" class="stack"></div>
-      <button class="btn" type="button" id="logout-btn">Log out</button>
-    </section>
-  </main>
+      <button class="btn danger" type="button" id="logout-btn">Log out</button>
+        </section>
+      </main>
   <p class="toast" id="toast" hidden></p>
-</div>
-<script nonce="${nonce}">
-(() => {
-  const vscode = acquireVsCodeApi();
+    </div>
+    <script nonce="${nonce}">
+      (() => {
+        const vscode = acquireVsCodeApi();
   const screens = ["splash","login","signup","forgot","reset","home","search","user","friends","messages","notifications","profile","settings"];
   let state = ${initialState};
   let toastSeq = -1;
@@ -336,9 +360,41 @@ export function renderWebview(webview: Webview, state: HostState): string {
   function isState(value) {
     return value && value.version === 1 && value.type === "state" && screens.includes(value.screen) && typeof value.e2eeEnabled === "boolean";
   }
+  function initial(value) {
+    const text = String(value || "").trim();
+    return (text[0] || "D").toUpperCase();
+  }
+  function when(iso) {
+    if (!iso) return "";
+    const date = new Date(iso);
+    if (Number.isNaN(date.getTime())) return "";
+    const delta = Date.now() - date.getTime();
+    const minute = 60000;
+    if (delta < minute) return "now";
+    if (delta < 60 * minute) return Math.floor(delta / minute) + "m";
+    if (delta < 24 * 60 * minute) return Math.floor(delta / (60 * minute)) + "h";
+    if (delta < 7 * 24 * 60 * minute) return Math.floor(delta / (24 * 60 * minute)) + "d";
+    return date.toLocaleDateString();
+  }
+  function chatPerson(conversation) {
+    return {
+      name: conversation.peerDisplayName || "Developer",
+      username: conversation.peerUsername || "",
+    };
+  }
+  function avatarMarkup(person, large) {
+    const url = person && person.profileImageUrl ? String(person.profileImageUrl) : "";
+    const id = url.split("/").filter(Boolean).pop();
+    const src = id && state.avatars ? state.avatars[id] : "";
+    const label = "Profile picture of " + ((person && (person.displayName || person.username)) || "user");
+    if (typeof src === "string" && src.indexOf("data:image/") === 0) {
+      return '<img class="avatar-img' + (large ? " lg" : "") + '" alt="' + esc(label) + '" src="' + src + '">';
+    }
+    return '<span class="avatar' + (large ? " lg" : "") + '" role="img" aria-label="' + esc(label) + '">' + esc(initial(person && (person.displayName || person.username))) + '</span>';
+  }
   function people(target, items, empty) {
     target.innerHTML = items.length ? items.map((p) =>
-      '<div class="card"><strong>' + esc(p.displayName) + '</strong><span class="muted">@' + esc(p.username) + (p.relationship ? " · " + esc(p.relationship) : "") + '</span><div class="row">'
+      '<div class="card">' + avatarMarkup(p, false) + '<strong>' + esc(p.displayName) + '</strong><span class="muted">@' + esc(p.username) + (p.relationship ? " · " + esc(p.relationship) : "") + '</span><div class="row">'
       + '<button class="btn" data-act="open-user" data-id="' + esc(p.id) + '">Profile</button>'
       + (p.relationship === "FRIENDS" ? '<button class="btn" data-act="message" data-id="' + esc(p.id) + '">Message</button>' : "")
       + (p.relationship === "NONE" || !p.relationship ? '<button class="btn" data-act="friend" data-id="' + esc(p.id) + '">Add friend</button>' : "")
@@ -350,7 +406,8 @@ export function renderWebview(webview: Webview, state: HostState): string {
     const visible = state.phase === "checking" ? "splash" : state.screen;
     document.querySelectorAll("[data-screen]").forEach((el) => { el.hidden = el.getAttribute("data-screen") !== visible; });
     document.getElementById("app-nav").hidden = !(state.authenticated && state.phase === "ready");
-    document.getElementById("back-btn").hidden = !state.canGoBack || state.phase === "checking";
+    const inThread = visible === "messages" && !!state.activeConversationId;
+    document.getElementById("back-btn").hidden = state.phase === "checking" || !(state.canGoBack || inThread);
     document.querySelectorAll(".nav-btn").forEach((btn) => {
       if (btn.getAttribute("data-go") === state.screen) btn.setAttribute("aria-current", "page");
       else btn.removeAttribute("aria-current");
@@ -358,6 +415,7 @@ export function renderWebview(webview: Webview, state: HostState): string {
     const error = document.getElementById("error");
     const notice = document.getElementById("notice");
     error.hidden = !state.error; error.textContent = state.error || "";
+    document.getElementById("retry").hidden = !state.error;
     notice.hidden = !state.notice; notice.textContent = state.notice || "";
     const badge = document.getElementById("badge");
     badge.hidden = !(state.unreadNotifications > 0);
@@ -400,12 +458,29 @@ export function renderWebview(webview: Webview, state: HostState): string {
     document.getElementById("outgoing-list").innerHTML = (state.outgoingRequests || []).length ? state.outgoingRequests.map((r) =>
       '<div class="card"><strong>' + esc(r.counterpart && r.counterpart.displayName) + '</strong><span class="muted">' + esc(r.status) + '</span></div>'
     ).join("") : '<p class="muted">No outgoing requests.</p>';
-    document.getElementById("chat-list").innerHTML = (state.conversations || []).length ? state.conversations.map((c) =>
-      '<div class="card"><button class="linkish" data-act="open-chat" data-id="' + esc(c.id) + '">Conversation</button><span class="muted">' + esc((c.participantIds || []).filter((id) => !state.user || id !== state.user.id).join(", ") || "Direct message") + '</span></div>'
-    ).join("") : '<p class="muted">No conversations yet. Message a friend to start one.</p>';
+    document.getElementById("inbox").hidden = inThread;
+    document.getElementById("chat-list").innerHTML = (state.conversations || []).length ? state.conversations.map((c) => {
+      const person = chatPerson(c);
+      return '<button class="person" data-act="open-chat" data-id="' + esc(c.id) + '"><span class="avatar" aria-hidden="true">' + esc(initial(person.name)) + '</span><span class="person-copy"><strong>' + esc(person.name) + '</strong><span class="muted">@' + esc(person.username || "developer") + '</span></span></button>';
+    }).join("") : '<p class="muted">No conversations yet. Message a friend to start one.</p>';
     const thread = document.getElementById("thread");
-    thread.hidden = !state.activeConversationId || visible !== "messages";
-    document.getElementById("thread-title").textContent = state.activeConversationId ? "Conversation" : "";
+    thread.hidden = !inThread;
+    const openChat = (state.conversations || []).find((item) => item.id === state.activeConversationId);
+    const person = openChat ? chatPerson(openChat) : { name: "Chat", username: "" };
+    document.getElementById("thread-name").textContent = person.name;
+    document.getElementById("thread-user").textContent = person.username ? ("@" + person.username) : "";
+    const otherId = openChat && state.user ? (openChat.participantIds || []).find((id) => id !== state.user.id) : "";
+    const blockedPeer = !!(otherId && (state.blockedUsers || []).some((user) => user.id === otherId));
+    const lock = state.messageLock === "blocked-me" ? "blocked-me" : (state.messageLock === "blocked-by-me" || blockedPeer) ? "blocked-by-me" : "none";
+    const threadBlock = document.getElementById("thread-block");
+    const messageForm = document.getElementById("message-form");
+    if (threadBlock && messageForm) {
+      threadBlock.hidden = lock === "none";
+      messageForm.hidden = lock !== "none";
+      threadBlock.textContent = lock === "blocked-me"
+        ? "This conversation is unavailable. You can't message this user."
+        : "You blocked this user.";
+    }
     const list = document.getElementById("message-list");
     const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 48;
     const ordered = (state.messages || []).slice().reverse();
@@ -416,10 +491,11 @@ export function renderWebview(webview: Webview, state: HostState): string {
     if (nearBottom || ordered.length < 2) list.scrollTop = list.scrollHeight;
     document.getElementById("jump-latest").hidden = nearBottom || !state.activeConversationId;
     document.getElementById("note-list").innerHTML = (state.notifications || []).length ? state.notifications.map((n) =>
-      '<div class="card"><button class="btn" data-act="open-note" data-id="' + esc(n.id) + '">' + esc(n.message) + '</button><span class="muted">' + esc(n.type) + (n.read ? " · read" : " · unread") + '</span></div>'
-    ).join("") : '<p class="muted">No notifications yet.</p>';
+      '<button class="note' + (n.read ? "" : " unread") + '" data-act="open-note" data-id="' + esc(n.id) + '"><span class="avatar" aria-hidden="true">' + esc(initial(n.message)) + '</span><span class="note-copy"><strong>' + esc(n.message) + '</strong><span class="muted">' + esc(when(n.createdAt)) + '</span></span>' + (n.read ? "" : '<span class="dot" aria-label="Unread"></span>') + '</button>'
+    ).join("") : '<p class="muted">No notifications yet. New requests and messages show up here.</p>';
     if (state.user) {
-      document.getElementById("me-line").textContent = "@" + state.user.username + (state.user.email ? " · " + state.user.email : "") + " · " + (state.user.accountType || "PUBLIC");
+      document.getElementById("me-avatar").innerHTML = avatarMarkup(state.user, true);
+      document.getElementById("me-line").textContent = "@" + state.user.username + (state.user.email ? " · " + state.user.email : "") + " · " + (state.user.accountType === "PRIVATE" ? "Private" : "Public");
       const form = document.getElementById("profile-form");
       if (document.activeElement && form.contains(document.activeElement)) {
         /* keep in-progress edits */
@@ -430,19 +506,31 @@ export function renderWebview(webview: Webview, state: HostState): string {
       }
     }
     const selected = state.selectedUser;
+    document.getElementById("user-avatar").innerHTML = selected ? avatarMarkup(selected, true) : "";
     document.getElementById("user-name").textContent = selected ? (selected.displayName || selected.username) : "Profile";
-    document.getElementById("user-meta").textContent = selected ? ("@" + selected.username + " · " + (selected.accountType || "") + (selected.relationship ? " · " + selected.relationship : "") + (selected.limited ? " · limited" : "")) : "";
-    document.getElementById("user-bio").textContent = selected && !selected.limited ? (selected.bio || "") : (selected && selected.limited ? "This account is private." : "");
-    document.getElementById("user-actions").innerHTML = selected ? (
-      (selected.relationship === "NONE" ? '<button class="btn" data-act="friend" data-id="' + esc(selected.id) + '">Add friend</button>' : "")
-      + (selected.relationship === "FRIENDS" ? '<button class="btn" data-act="message" data-id="' + esc(selected.id) + '">Message</button><button class="btn" data-act="unfriend" data-id="' + esc(selected.id) + '">Remove friend</button>' : "")
-      + (selected.relationship === "BLOCKED" ? '<button class="btn" data-act="unblock" data-id="' + esc(selected.id) + '">Unblock</button>' : '<button class="btn" data-act="block" data-id="' + esc(selected.id) + '">Block</button>')
-    ) : "";
+    document.getElementById("user-meta").textContent = selected ? ("@" + selected.username) : "";
+    const blocked = selected && selected.relationship === "BLOCKED";
+    const friends = selected && selected.relationship === "FRIENDS";
+    const privateLocked = selected && selected.accountType === "PRIVATE" && !friends && !blocked;
+    document.getElementById("user-bio").textContent = !selected ? "" : blocked ? "You blocked this account." : privateLocked ? "This account is private." : (selected.bio || "");
+    document.getElementById("user-actions").innerHTML = !selected ? "" : blocked
+      ? '<button class="btn" data-act="unblock" data-id="' + esc(selected.id) + '" data-name="' + esc(selected.username) + '">Unblock</button>'
+      : (selected.relationship === "NONE" ? '<button class="btn primary" data-act="friend" data-id="' + esc(selected.id) + '">Send request</button>' : "")
+        + (selected.relationship === "OUTGOING_REQUEST" ? '<span class="muted">Request sent</span>' : "")
+        + (selected.relationship === "INCOMING_REQUEST" ? '<span class="muted">Request received</span>' : "")
+        + (friends ? '<button class="btn" data-act="message" data-id="' + esc(selected.id) + '">Message</button><button class="btn" data-act="unfriend" data-id="' + esc(selected.id) + '">Remove friend</button>' : "")
+        + '<button class="btn" data-act="block" data-id="' + esc(selected.id) + '">Block</button>';
+    const blockedList = document.getElementById("blocked-list");
+    if (blockedList) {
+      blockedList.innerHTML = (state.blockedUsers || []).length ? state.blockedUsers.map((user) =>
+        '<div class="card">' + avatarMarkup(user, false) + '<strong>@' + esc(user.username) + '</strong><span class="muted">' + esc(user.displayName) + '</span><button class="btn" data-act="unblock" data-id="' + esc(user.id) + '" data-name="' + esc(user.username) + '">Unblock</button></div>'
+      ).join("") : '<p class="muted">No blocked accounts</p>';
+    }
     document.getElementById("device-list").innerHTML = (state.devices || []).length ? state.devices.map((d) =>
       '<div class="card"><strong>' + esc(d.deviceName || d.id) + '</strong><span class="muted">' + esc(d.platform || "") + '</span><button class="btn" data-act="revoke" data-id="' + esc(d.id) + '">Revoke</button></div>'
     ).join("") : '<p class="muted">No devices listed.</p>';
     document.querySelectorAll("button, input, textarea, select").forEach((el) => {
-      if (el.id === "back-btn" || el.hasAttribute("data-go") || el.hasAttribute("data-toggle")) return;
+      if (el.id === "back-btn" || el.id === "thread-back" || el.id === "retry" || el.hasAttribute("data-go") || el.hasAttribute("data-toggle")) return;
       el.disabled = !!state.busy;
     });
   }
@@ -468,18 +556,58 @@ export function renderWebview(webview: Webview, state: HostState): string {
     if (act === "reject") vscode.postMessage({ version: 1, type: "rejectFriendRequest", requestId: id });
     if (act === "unfriend") vscode.postMessage({ version: 1, type: "removeFriend", userId: id });
     if (act === "block") vscode.postMessage({ version: 1, type: "blockUser", userId: id });
-    if (act === "unblock") vscode.postMessage({ version: 1, type: "unblockUser", userId: id });
+    if (act === "unblock") {
+      const name = target.getAttribute("data-name") || "this account";
+      if (!window.confirm("Unblock @" + name + "?")) return;
+      vscode.postMessage({ version: 1, type: "unblockUser", userId: id });
+    }
     if (act === "message") vscode.postMessage({ version: 1, type: "openConversation", participantId: id });
     if (act === "open-chat") vscode.postMessage({ version: 1, type: "openConversation", conversationId: id });
     if (act === "open-note") vscode.postMessage({ version: 1, type: "openNotification", notificationId: id });
     if (act === "revoke") vscode.postMessage({ version: 1, type: "revokeDevice", deviceId: id });
   });
-  document.getElementById("back-btn").addEventListener("click", () => vscode.postMessage({ version: 1, type: "back" }));
+  document.getElementById("back-btn").addEventListener("click", () => {
+    if (state.screen === "messages" && state.activeConversationId) {
+      vscode.postMessage({ version: 1, type: "closeThread" });
+      return;
+    }
+    vscode.postMessage({ version: 1, type: "back" });
+  });
+  document.getElementById("thread-back").addEventListener("click", () => vscode.postMessage({ version: 1, type: "closeThread" }));
   document.getElementById("login-form").addEventListener("submit", (e) => { e.preventDefault(); const d = new FormData(e.target); vscode.postMessage({ version: 1, type: "login", usernameOrEmail: String(d.get("usernameOrEmail")||""), password: String(d.get("password")||"") }); });
   document.getElementById("signup-form").addEventListener("submit", (e) => { e.preventDefault(); const d = new FormData(e.target); vscode.postMessage({ version: 1, type: "signup", username: String(d.get("username")||""), email: String(d.get("email")||""), displayName: String(d.get("displayName")||""), password: String(d.get("password")||"") }); });
   document.getElementById("forgot-form").addEventListener("submit", (e) => { e.preventDefault(); const d = new FormData(e.target); vscode.postMessage({ version: 1, type: "forgotPassword", email: String(d.get("email")||"") }); });
   document.getElementById("reset-form").addEventListener("submit", (e) => { e.preventDefault(); const d = new FormData(e.target); vscode.postMessage({ version: 1, type: "resetPassword", token: String(d.get("token")||""), newPassword: String(d.get("newPassword")||"") }); });
-  document.getElementById("profile-form").addEventListener("submit", (e) => { e.preventDefault(); const d = new FormData(e.target); vscode.postMessage({ version: 1, type: "updateProfile", displayName: String(d.get("displayName")||""), bio: String(d.get("bio")||""), accountType: String(d.get("accountType")||"PUBLIC") }); });
+  document.getElementById("profile-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const d = new FormData(e.target);
+    const accountType = String(d.get("accountType") || "PUBLIC");
+    if (state.user && state.user.accountType !== "PRIVATE" && accountType === "PRIVATE" && !window.confirm("Switch to private account? New people will need your approval before they can see more than your basic profile.")) return;
+    vscode.postMessage({ version: 1, type: "updateProfile", displayName: String(d.get("displayName")||""), bio: String(d.get("bio")||""), accountType: accountType });
+  });
+  document.getElementById("remove-avatar").addEventListener("click", () => vscode.postMessage({ version: 1, type: "removeAvatar" }));
+  document.getElementById("avatar-file").addEventListener("change", (event) => {
+    const input = event.target;
+    const file = input instanceof HTMLInputElement && input.files ? input.files[0] : undefined;
+    if (input instanceof HTMLInputElement) input.value = "";
+    if (!file) return;
+    if (file.type !== "image/jpeg" && file.type !== "image/png" && file.type !== "image/webp") {
+      window.alert("This image format isn't supported.");
+      return;
+    }
+    if (file.size > 2097152) {
+      window.alert("Profile picture is too large.");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = typeof reader.result === "string" ? reader.result : "";
+      const data = result.split(",")[1] || "";
+      if (!data) return;
+      vscode.postMessage({ version: 1, type: "uploadAvatar", contentType: file.type, dataBase64: data });
+    };
+    reader.readAsDataURL(file);
+  });
   document.getElementById("password-form").addEventListener("submit", (e) => { e.preventDefault(); const d = new FormData(e.target); vscode.postMessage({ version: 1, type: "changePassword", currentPassword: String(d.get("currentPassword")||""), newPassword: String(d.get("newPassword")||"") }); e.target.reset(); });
   document.getElementById("message-form").addEventListener("submit", (e) => { e.preventDefault(); if (!state.activeConversationId) return; const d = new FormData(e.target); vscode.postMessage({ version: 1, type: "sendMessage", conversationId: state.activeConversationId, text: String(d.get("text")||"") }); e.target.reset(); });
   document.getElementById("search-form").addEventListener("submit", (event) => event.preventDefault());
@@ -499,19 +627,16 @@ export function renderWebview(webview: Webview, state: HostState): string {
     list.scrollTop = list.scrollHeight;
     document.getElementById("jump-latest").hidden = true;
   });
-  document.getElementById("reload-social").addEventListener("click", () => vscode.postMessage({ version: 1, type: "loadSocial" }));
-  document.getElementById("reload-notes").addEventListener("click", () => vscode.postMessage({ version: 1, type: "loadNotifications" }));
+  document.getElementById("retry").addEventListener("click", () => vscode.postMessage({ version: 1, type: "retry" }));
   document.getElementById("read-all").addEventListener("click", () => vscode.postMessage({ version: 1, type: "markAllNotificationsRead" }));
-  document.getElementById("reload-me").addEventListener("click", () => vscode.postMessage({ version: 1, type: "refreshProfile" }));
   document.getElementById("resend-verify").addEventListener("click", () => vscode.postMessage({ version: 1, type: "resendVerification" }));
-  document.getElementById("reload-devices").addEventListener("click", () => vscode.postMessage({ version: 1, type: "loadDevices" }));
   document.getElementById("logout-btn").addEventListener("click", () => vscode.postMessage({ version: 1, type: "logout" }));
   window.addEventListener("message", (event) => { if (isState(event.data)) apply(event.data); });
   apply(state);
-  vscode.postMessage({ version: 1, type: "ready" });
-})();
-</script>
-</body>
+        vscode.postMessage({ version: 1, type: "ready" });
+      })();
+    </script>
+  </body>
 </html>`;
 }
 
@@ -544,5 +669,8 @@ export function createStateMessage(state: HostState): HostMessage {
     toast: state.toast,
     toastSeq: state.toastSeq,
     devices: [...state.devices],
+    blockedUsers: [...(state.blockedUsers || [])],
+    avatars: { ...(state.avatars || {}) },
+    messageLock: state.messageLock || "none",
   };
 }

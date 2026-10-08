@@ -57,7 +57,15 @@ export const webviewMessageSchema = z.discriminatedUnion("type", [
     displayName: z.string().min(1).max(50).optional(),
     bio: z.string().max(500).nullable().optional(),
     accountType: z.enum(["PUBLIC", "PRIVATE"]).optional(),
+    clearProfileImage: z.boolean().optional(),
   }).strict(),
+  z.object({
+    version: z.literal(1),
+    type: z.literal("uploadAvatar"),
+    contentType: z.enum(["image/jpeg", "image/png", "image/webp"]),
+    dataBase64: z.string().min(1).max(2_900_000),
+  }).strict(),
+  z.object({ version: z.literal(1), type: z.literal("removeAvatar") }).strict(),
   z.object({
     version: z.literal(1),
     type: z.literal("searchUsers"),
@@ -100,6 +108,8 @@ export const webviewMessageSchema = z.discriminatedUnion("type", [
     userId: z.string().min(1),
   }).strict(),
   z.object({ version: z.literal(1), type: z.literal("loadConversations") }).strict(),
+  z.object({ version: z.literal(1), type: z.literal("closeThread") }).strict(),
+  z.object({ version: z.literal(1), type: z.literal("retry") }).strict(),
   z.object({
     version: z.literal(1),
     type: z.literal("openConversation"),
@@ -164,6 +174,9 @@ export const hostMessageSchema = z.object({
   toast: z.string().nullable(),
   toastSeq: z.number().int().nonnegative(),
   devices: z.array(deviceSchema),
+  blockedUsers: z.array(userSummarySchema),
+  avatars: z.record(z.string(), z.string()),
+  messageLock: z.enum(["none", "blocked-by-me", "blocked-me"]),
 }).strict();
 
 export type HostMessage = z.infer<typeof hostMessageSchema>;

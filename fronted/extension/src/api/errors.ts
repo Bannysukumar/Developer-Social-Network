@@ -7,6 +7,8 @@ const HTTP_MESSAGES: Readonly<Record<number, string>> = {
   404: "The requested item was not found.",
   408: "The request timed out.",
   409: "The request conflicts with the current state.",
+  413: "Profile picture is too large.",
+  415: "This image format isn't supported.",
   429: "Too many requests. Try again shortly.",
 };
 

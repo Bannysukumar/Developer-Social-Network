@@ -8,11 +8,11 @@ import com.devconnect.socialnetwork.dto.PageResponse;
 import com.devconnect.socialnetwork.dto.request.DeleteAccountRequest;
 import com.devconnect.socialnetwork.dto.request.ReplaceProfileRequest;
 import com.devconnect.socialnetwork.dto.request.UpdateProfileRequest;
+import com.devconnect.socialnetwork.dto.response.BlockStatusResponse;
 import com.devconnect.socialnetwork.dto.response.UserProfileResponse;
 import com.devconnect.socialnetwork.dto.response.UserSummaryResponse;
 import com.devconnect.socialnetwork.entity.StoredFileEntity;
 import com.devconnect.socialnetwork.entity.UserEntity;
-import com.devconnect.socialnetwork.exception.ForbiddenException;
 import com.devconnect.socialnetwork.exception.ResourceNotFoundException;
 import com.devconnect.socialnetwork.exception.UnauthorizedException;
 import com.devconnect.socialnetwork.exception.ValidationFailedException;
@@ -102,8 +102,15 @@ public class UserService {
         }
         UserEntity target = userRepository.findById(targetUserId)
                 .orElseThrow(() -> new ResourceNotFoundException("Resource not found"));
-        if (target.getStatus() != AccountStatus.ACTIVE || blockService.eitherBlocked(viewerId, targetUserId)) {
+        if (target.getStatus() != AccountStatus.ACTIVE) {
             throw new ResourceNotFoundException("Resource not found");
+        }
+        BlockStatusResponse blocks = blockService.status(viewerId, targetUserId);
+        if (blocks.blockedMe()) {
+            throw new ResourceNotFoundException("Resource not found");
+        }
+        if (blocks.blockedByMe()) {
+            return userMapper.toVisible(target, RelationshipView.BLOCKED, true);
         }
         RelationshipView relationship = relationshipOf(viewerId, targetUserId);
         boolean limited = target.getAccountType() == AccountType.PRIVATE && relationship != RelationshipView.FRIENDS;
@@ -161,6 +168,15 @@ public class UserService {
         return userMapper.toSelf(saved);
     }
 
+    public List<UserSummaryResponse> blockedAccounts(String userId) {
+        List<UserSummaryResponse> accounts = new ArrayList<>();
+        for (String blockedId : blockService.blockedUserIds(userId)) {
+            userRepository.findById(blockedId).ifPresent(user ->
+                    accounts.add(userMapper.toSummary(user, RelationshipView.BLOCKED)));
+        }
+        return accounts;
+    }
+
     public PageResponse<UserSummaryResponse> search(String viewerId, String queryText, int page, int size) {
         String queryValue = TextNormalizer.searchQuery(queryText);
         Set<String> hidden = blockService.hiddenUserIds(viewerId);
@@ -205,11 +221,8 @@ public class UserService {
         }
         UserEntity owner = userRepository.findById(file.getOwnerId())
                 .orElseThrow(() -> new ResourceNotFoundException("Resource not found"));
-        if (owner.getStatus() != AccountStatus.ACTIVE || blockService.eitherBlocked(viewerId, owner.getId())) {
+        if (owner.getStatus() != AccountStatus.ACTIVE || blockService.status(viewerId, owner.getId()).blockedMe()) {
             throw new ResourceNotFoundException("Resource not found");
-        }
-        if (owner.getAccountType() == AccountType.PRIVATE && !friendshipService.areFriends(viewerId, owner.getId())) {
-            throw new ForbiddenException("This profile image is not available");
         }
         if (!fileId.equals(owner.getProfileImageFileId())) {
             throw new ResourceNotFoundException("Resource not found");

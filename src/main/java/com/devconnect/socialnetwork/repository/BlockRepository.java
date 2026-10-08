@@ -15,6 +15,8 @@ public interface BlockRepository extends MongoRepository<BlockEntity, String> {
 
     void deleteByBlockerIdAndBlockedId(String blockerId, String blockedId);
 
+    List<BlockEntity> findByBlockerId(String blockerId);
+
     List<BlockEntity> findByBlockerIdOrBlockedId(String blockerId, String blockedId);
 
     List<BlockEntity> findByBlockerIdAndBlockedIdIn(String blockerId, Collection<String> blockedIds);

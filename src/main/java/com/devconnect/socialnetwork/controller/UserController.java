@@ -21,6 +21,8 @@ import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
+
+import java.util.List;
 import org.springframework.http.CacheControl;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -55,6 +57,12 @@ public class UserController {
         this.userService = userService;
         this.blockService = blockService;
         this.fileStorageService = fileStorageService;
+    }
+
+    @GetMapping("/users/me/blocks")
+    @Operation(summary = "List accounts blocked by the caller")
+    public ResponseEntity<ApiResponse<List<UserSummaryResponse>>> blocks() {
+        return ApiResponses.ok("Blocked accounts retrieved", userService.blockedAccounts(SecurityUtils.currentUserId()));
     }
 
     @GetMapping("/users/me")

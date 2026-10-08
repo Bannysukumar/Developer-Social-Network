@@ -29,6 +29,9 @@ const host = {
   toast: null,
   toastSeq: 0,
   devices: [],
+  blockedUsers: [],
+  avatars: {},
+  messageLock: "none" as const,
 };
 
 describe("Webview bridge protocol", () => {

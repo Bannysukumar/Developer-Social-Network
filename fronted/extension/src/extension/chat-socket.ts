@@ -49,7 +49,7 @@ export interface SocketHandlers {
 }
 
 export interface ChatSocket {
-  connect(url: string, accessToken: string, handlers: SocketHandlers): void;
+  connect(url: string, accessToken: string, handlers: SocketHandlers, refreshToken?: () => Promise<string | undefined>): void;
   close(): void;
 }
 
@@ -61,27 +61,47 @@ export class NodeChatSocket implements ChatSocket {
   private stopped = true;
   private url = "";
   private token = "";
+  private refreshToken: () => Promise<string | undefined> = async () => this.token;
   private handlers: SocketHandlers = { onFrame: () => undefined, onStatus: () => undefined };
 
-  connect(url: string, accessToken: string, handlers: SocketHandlers): void {
+  connect(
+    url: string,
+    accessToken: string,
+    handlers: SocketHandlers,
+    refreshToken?: () => Promise<string | undefined>,
+  ): void {
     this.stopSocket();
     this.stopped = false;
     this.attempt = 0;
     this.url = url;
     this.token = accessToken;
+    this.refreshToken = refreshToken ?? (async () => this.token);
     this.handlers = handlers;
     this.open(false);
   }
 
   close(): void {
+    const alreadyStopped = this.stopped;
     this.stopped = true;
     this.stopSocket();
-    this.handlers.onStatus("offline", false);
+    if (!alreadyStopped) this.handlers.onStatus("offline", false);
   }
 
   private open(retry: boolean): void {
     if (this.stopped) return;
     this.stopSocket();
+    this.handlers.onStatus(retry ? "reconnecting" : "connecting", false);
+    void this.refreshToken().then((token) => {
+      if (this.stopped) return;
+      if (token) this.token = token;
+      this.openSocket(retry);
+    }).catch(() => {
+      if (!this.stopped) this.schedule();
+    });
+  }
+
+  private openSocket(retry: boolean): void {
+    if (this.stopped) return;
     this.handlers.onStatus(retry ? "reconnecting" : "connecting", false);
     const socket = new WebSocket(this.url, {
       headers: { Authorization: `Bearer ${this.token}` },

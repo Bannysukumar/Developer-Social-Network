@@ -21,6 +21,11 @@ export interface ApiRequestOptions {
   readonly method?: ApiMethod;
   readonly query?: Readonly<Record<string, string | number | boolean | undefined>>;
   readonly body?: unknown;
+  readonly multipart?: {
+    readonly filename: string;
+    readonly contentType: string;
+    readonly bytes: Uint8Array;
+  };
   readonly signal?: AbortSignal;
   readonly accessToken?: string | null;
   readonly skipAuth?: boolean;
@@ -62,9 +67,18 @@ export class ApiClient {
   ): Promise<T | unknown> {
     const url = this.createUrl(path, options.query);
     const method = options.method ?? "GET";
-    let body: string | undefined;
+    let body: string | FormData | undefined;
 
-    if (options.body !== undefined) {
+    if (options.multipart && options.body !== undefined) {
+      throw new ApiError("request", "The request could not be prepared.");
+    }
+    if (options.multipart) {
+      const form = new FormData();
+      const copy = new Uint8Array(options.multipart.bytes.byteLength);
+      copy.set(options.multipart.bytes);
+      form.append("file", new Blob([copy], { type: options.multipart.contentType }), options.multipart.filename);
+      body = form;
+    } else if (options.body !== undefined) {
       try {
         body = JSON.stringify(options.body);
       } catch {
@@ -80,7 +94,7 @@ export class ApiClient {
     }
 
     const headers: Record<string, string> = { Accept: "application/json" };
-    if (body !== undefined) {
+    if (typeof body === "string") {
       headers["Content-Type"] = "application/json";
     }
     if (!options.skipAuth) {

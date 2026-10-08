@@ -65,6 +65,7 @@ function installFetch(): { fetcher: typeof fetch; friends: boolean } {
       return ok(null);
     }
     if (path === "users/me" && method === "GET") return ok(me);
+    if (path === "users/me/blocks") return ok([]);
     if (path === "users/me" && method === "PATCH") return ok({ ...me, displayName: body.displayName, bio: body.bio, accountType: body.accountType });
     if (path === "users/search") return ok({ items: [{ ...bob, relationship: world.friends ? "FRIENDS" : "NONE" }], page: 0, size: 20, totalElements: 1, totalPages: 1, hasNext: false });
     if (path === "users/u2" && method === "GET") return ok({ ...bob, relationship: world.friends ? "FRIENDS" : world.outgoing ? "OUTGOING_REQUEST" : "NONE" });
@@ -180,6 +181,9 @@ describe("signed-in journey", () => {
     expect(flow.snapshot().searchResults[0]?.username).toBe("bob");
     await flow.handleMessage({ version: 1, type: "openUser", userId: "u2" });
     expect(flow.snapshot().screen).toBe("user");
+    await flow.handleMessage({ version: 1, type: "back" });
+    expect(flow.snapshot().screen).toBe("home");
+    await flow.handleMessage({ version: 1, type: "openUser", userId: "u2" });
     await flow.handleMessage({ version: 1, type: "sendFriendRequest", userId: "u2" });
     expect(flow.snapshot().notice).toBe("Friend request sent.");
 
@@ -203,12 +207,12 @@ describe("signed-in journey", () => {
 
     await flow.handleMessage({ version: 1, type: "navigate", destination: "profile" });
     await flow.handleMessage({ version: 1, type: "updateProfile", displayName: "Ada Lovelace", bio: "code", accountType: "PRIVATE" });
-    expect(flow.snapshot().notice).toBe("Profile saved.");
+    expect(flow.snapshot().notice).toBe("Account is now private.");
 
     await flow.handleMessage({ version: 1, type: "navigate", destination: "settings" });
     expect(flow.snapshot().devices[0]?.id).toBe("d1");
     await flow.handleMessage({ version: 1, type: "back" });
-    expect(flow.snapshot().screen).toBe("profile");
+    expect(flow.snapshot().screen).toBe("home");
 
     await flow.handleMessage({ version: 1, type: "logout" });
     expect(flow.snapshot().screen).toBe("login");

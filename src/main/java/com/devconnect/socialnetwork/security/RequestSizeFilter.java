@@ -34,7 +34,11 @@ public class RequestSizeFilter extends OncePerRequestFilter {
             @NonNull FilterChain filterChain
     ) throws ServletException, IOException {
         long length = request.getContentLengthLong();
-        if (length > properties.getSecurity().getMaxRequestBytes()) {
+        String path = request.getRequestURI();
+        long limit = path != null && path.endsWith("/users/me/avatar")
+                ? properties.getStorage().getMaxImageBytes() + 65_536L
+                : properties.getSecurity().getMaxRequestBytes();
+        if (length > limit) {
             errorResponseWriter.write(
                     response,
                     HttpStatus.PAYLOAD_TOO_LARGE,

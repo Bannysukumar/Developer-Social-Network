@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type { ApiClient } from "./client";
 import { ApiError } from "./errors";
 import {
@@ -44,6 +45,18 @@ export class UsersApi {
   updateMe(input: UpdateProfileRequestDto): Promise<UserProfileDto> {
     const body = updateProfileRequestSchema.parse(input);
     return this.client.request("users/me", userProfileSchema, { method: "PATCH", body });
+  }
+
+  uploadAvatar(bytes: Uint8Array, contentType: "image/jpeg" | "image/png" | "image/webp"): Promise<UserProfileDto> {
+    const extension = contentType === "image/png" ? "png" : contentType === "image/webp" ? "webp" : "jpg";
+    return this.client.request("users/me/avatar", userProfileSchema, {
+      method: "POST",
+      multipart: { filename: `avatar.${extension}`, contentType, bytes },
+    });
+  }
+
+  blocked(): Promise<readonly UserSummaryDto[]> {
+    return this.client.request("users/me/blocks", z.array(userSummarySchema), { method: "GET" });
   }
 
   block(userId: string): Promise<unknown> {

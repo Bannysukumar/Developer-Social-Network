@@ -96,6 +96,7 @@ export const updateProfileRequestSchema = z.object({
   displayName: z.string().trim().min(1).max(50).optional(),
   bio: z.string().max(500).nullable().optional(),
   accountType: accountTypeSchema.optional(),
+  clearProfileImage: z.boolean().optional(),
 }).strict();
 
 export type UpdateProfileRequestDto = z.infer<typeof updateProfileRequestSchema>;
@@ -118,6 +119,8 @@ export const conversationSchema = z.object({
   participantIds: z.array(z.string().min(1)),
   createdAt: z.string().optional(),
   updatedAt: z.string().optional(),
+  peerDisplayName: z.string().optional(),
+  peerUsername: z.string().optional(),
 }).passthrough();
 
 export type ConversationDto = z.infer<typeof conversationSchema>;
@@ -174,9 +177,8 @@ export const notificationListSchema = z.object({
 export type NotificationListDto = z.infer<typeof notificationListSchema>;
 
 export const blockStatusSchema = z.object({
-  blocked: z.boolean(),
-  blockedByMe: z.boolean().optional(),
-  blockedMe: z.boolean().optional(),
+  blockedByMe: z.boolean(),
+  blockedMe: z.boolean(),
 }).passthrough();
 
 export type BlockStatusDto = z.infer<typeof blockStatusSchema>;

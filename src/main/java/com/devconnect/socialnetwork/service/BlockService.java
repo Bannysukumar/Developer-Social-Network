@@ -20,6 +20,7 @@ import org.springframework.stereotype.Service;
 import java.time.Clock;
 import java.util.Collection;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -56,7 +57,7 @@ public class BlockService {
 
     public void assertCanInteract(String firstUserId, String secondUserId) {
         if (eitherBlocked(firstUserId, secondUserId)) {
-            throw new ForbiddenException("This interaction is not allowed");
+            throw new ForbiddenException("You can't interact with this account.");
         }
     }
 
@@ -77,6 +78,10 @@ public class BlockService {
         blockRepository.findByBlockerIdAndBlockedIdIn(userId, otherIds)
                 .forEach(block -> ids.add(block.getBlockedId()));
         return ids;
+    }
+
+    public List<String> blockedUserIds(String userId) {
+        return blockRepository.findByBlockerId(userId).stream().map(BlockEntity::getBlockedId).toList();
     }
 
     public BlockStatusResponse status(String userId, String targetUserId) {
