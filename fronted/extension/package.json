@@ -3,7 +3,7 @@
   "displayName": "DevConnect",
   "description": "A developer community inside Visual Studio Code.",
   "publisher": "Bannysukumar2255",
-  "version": "0.4.1",
+  "version": "0.4.3",
   "private": true,
   "engines": {
     "vscode": "^1.85.0"
@@ -45,13 +45,13 @@
       "properties": {
         "devconnect.apiBaseUrl": {
           "type": "string",
-          "default": "http://185.216.203.209/api/v1",
+          "default": "https://devconnectt.duckdns.org/api/v1",
           "description": "DevConnect REST API base URL. Must end in /api/v1. HTTPS is required unless the host is localhost or allowInsecureHttp is enabled."
         },
         "devconnect.allowInsecureHttp": {
           "type": "boolean",
-          "default": true,
-          "description": "Allow a remote http:// API base URL. Disable this when a verified HTTPS endpoint is available."
+          "default": false,
+          "description": "Allow a remote http:// API base URL. Leave this off for the HTTPS API."
         },
         "devconnect.requestTimeoutMs": {
           "type": "number",

@@ -4,13 +4,11 @@ Production-oriented VS Code extension for DevConnect: Activity Bar shell, authen
 
 ## Backend
 
-Default settings target the live deploy:
+Default settings target the live HTTPS deploy:
 
-- API: `http://185.216.203.209/api/v1`
-- Docs: [Swagger UI](http://185.216.203.209/swagger-ui/index.html)
-- `devconnect.allowInsecureHttp` defaults to `true` for that HTTP endpoint
-
-Prefer HTTPS when a verified TLS endpoint exists, then disable `allowInsecureHttp`.
+- API: `https://devconnectt.duckdns.org/api/v1`
+- Docs: [Swagger UI](https://devconnectt.duckdns.org/swagger-ui/index.html)
+- `devconnect.allowInsecureHttp` defaults to `false`
 
 ## Screen flow
 
@@ -26,14 +24,14 @@ Logout clears SecretStorage tokens and in-memory social data, then returns to Lo
 - Friends: incoming/outgoing requests, accept/reject, remove
 - Messages: encrypted on the device with X25519 and AES-GCM after the friend's Ed25519 signed prekey is checked. The server stores ciphertext only. This is not the Signal protocol. A friend must publish keys before a message can be sent. One ciphertext is stored per message, for the friend's first verified device.
 
-The live API is still `http://185.216.203.209`. Port 443 on that address presents a Let's Encrypt certificate for `angafunctionhall.com`, not for DevConnect. The extension will not trust that certificate or skip TLS checks. HTTPS starts only after a certificate is issued for an API hostname and the proxy is pointed at this API.
+The extension uses `https://devconnectt.duckdns.org` and checks the certificate. It does not use the certificate on `185.216.203.209`, which belongs to another site.
 
 ## Settings
 
 | Setting | Default | Purpose |
 | --- | --- | --- |
-| `devconnect.apiBaseUrl` | `http://185.216.203.209/api/v1` | REST base URL ending in `/api/v1` |
-| `devconnect.allowInsecureHttp` | `true` | Allow remote `http://` |
+| `devconnect.apiBaseUrl` | `https://devconnectt.duckdns.org/api/v1` | REST base URL ending in `/api/v1` |
+| `devconnect.allowInsecureHttp` | `false` | Allow remote `http://` |
 | `devconnect.requestTimeoutMs` | `15000` | Request timeout |
 
 ## Build and check

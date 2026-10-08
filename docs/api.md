@@ -169,7 +169,7 @@ Identity registration:
 
 Client frames: `PING`, `SEND`, `DELIVERED`, `READ`.
 
-`SEND` uses the same ciphertext fields as the REST message body plus `conversationId`. Server frames are `READY`, `MESSAGE`, `DELIVERED`, `READ`, `PONG`, and `ERROR`.
+`SEND` uses the same ciphertext fields as the REST message body plus `conversationId`. Server frames are `READY`, `MESSAGE`, `DELIVERED`, `READ`, `PONG`, `ERROR`, and `NOTIFICATION`. A `NOTIFICATION` frame uses the same object as a notification in `GET /notifications`. There is no presence topic and no typing frame.
 
 ## Health
 

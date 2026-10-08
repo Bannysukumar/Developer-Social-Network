@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import { createApiConfig } from "../api/config";
 import { AuthService } from "./auth-service";
-import { chatSocketUrl, messageFromFrame, NodeChatSocket } from "./chat-socket";
+import { chatSocketUrl, NodeChatSocket } from "./chat-socket";
 import { SessionFlow } from "./session-flow";
 import { createStateMessage, renderWebview } from "./webview";
 
@@ -58,9 +58,9 @@ class DevConnectViewProvider implements vscode.WebviewViewProvider {
     const token = await this.auth.getAccessToken();
     if (!token || token === this.socketToken) return;
     this.socketToken = token;
-    this.chat.connect(chatSocketUrl(this.auth.apiConfig.baseUrl), token, (frame) => {
-      const message = messageFromFrame(frame);
-      if (message) this.flow.ingestLiveMessage(message);
+    this.chat.connect(chatSocketUrl(this.auth.apiConfig.baseUrl), token, {
+      onFrame: (frame) => this.flow.ingestFrame(frame),
+      onStatus: (status, recovered) => this.flow.setConnection(status, recovered),
     });
   }
 }
@@ -68,7 +68,7 @@ class DevConnectViewProvider implements vscode.WebviewViewProvider {
 export function readApiConfigFromWorkspace() {
   const settings = vscode.workspace.getConfiguration("devconnect");
   return createApiConfig({
-    baseUrl: settings.get<string>("apiBaseUrl") ?? "https://localhost/api/v1",
+    baseUrl: settings.get<string>("apiBaseUrl") ?? "https://devconnectt.duckdns.org/api/v1",
     timeoutMs: settings.get<number>("requestTimeoutMs") ?? 15_000,
     allowInsecureHttp: settings.get<boolean>("allowInsecureHttp") ?? false,
   });

@@ -159,6 +159,10 @@ export const hostMessageSchema = z.object({
   messages: z.array(displayMessageSchema),
   notifications: z.array(notificationSchema),
   unreadNotifications: z.number().int().nonnegative(),
+  unreadMessages: z.number().int().nonnegative(),
+  connection: z.enum(["offline", "connecting", "connected", "reconnecting"]),
+  toast: z.string().nullable(),
+  toastSeq: z.number().int().nonnegative(),
   devices: z.array(deviceSchema),
 }).strict();
 

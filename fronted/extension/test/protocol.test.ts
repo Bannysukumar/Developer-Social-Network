@@ -24,6 +24,10 @@ const host = {
   messages: [],
   notifications: [],
   unreadNotifications: 0,
+  unreadMessages: 0,
+  connection: "offline" as const,
+  toast: null,
+  toastSeq: 0,
   devices: [],
 };
 

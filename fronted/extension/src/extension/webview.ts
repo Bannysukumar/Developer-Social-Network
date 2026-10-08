@@ -33,6 +33,10 @@ export interface HostState {
   readonly messages: readonly DisplayMessage[];
   readonly notifications: readonly NotificationDto[];
   readonly unreadNotifications: number;
+  readonly unreadMessages: number;
+  readonly connection: "offline" | "connecting" | "connected" | "reconnecting";
+  readonly toast: string | null;
+  readonly toastSeq: number;
   readonly devices: readonly DeviceDto[];
 }
 
@@ -58,6 +62,10 @@ export function emptyHostState(): HostState {
     messages: [],
     notifications: [],
     unreadNotifications: 0,
+    unreadMessages: 0,
+    connection: "offline",
+    toast: null,
+    toastSeq: 0,
     devices: [],
   };
 }
@@ -129,6 +137,13 @@ export function renderWebview(webview: Webview, state: HostState): string {
     @keyframes spin { to { transform: rotate(360deg); } }
   }
   .badge { min-width: 16px; padding: 0 4px; border-radius: 8px; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); font-size: 10px; }
+  .linkish { background: none; border: 0; padding: 0; color: var(--vscode-textLink-foreground); text-align: left; }
+  .toast { position: sticky; bottom: 8px; margin: 8px 12px; padding: 8px 10px; border-radius: 6px; background: var(--vscode-notifications-background, var(--vscode-editorWidget-background)); color: var(--vscode-notifications-foreground, var(--vscode-foreground)); border: 1px solid var(--vscode-notifications-border, var(--vscode-panel-border)); }
+  .status { margin-left: auto; font-size: 11px; color: var(--vscode-descriptionForeground); }
+  #message-list { max-height: 280px; overflow: auto; display: flex; flex-direction: column; gap: 6px; }
+  .msg.mine { margin-left: 18%; }
+  .msg.theirs { margin-right: 18%; }
+  .skel { height: 12px; border-radius: 4px; background: color-mix(in srgb, var(--vscode-descriptionForeground) 25%, transparent); }
 </style>
 </head>
 <body>
@@ -137,12 +152,13 @@ export function renderWebview(webview: Webview, state: HostState): string {
     <button class="back" id="back-btn" type="button" hidden>Back</button>
     <div class="mark" aria-hidden="true">d</div>
     <div class="brand">DevConnect</div>
+    <span class="status" id="live-status" hidden>Reconnecting…</span>
   </header>
   <nav id="app-nav" aria-label="DevConnect" hidden>
     <button class="nav-btn" type="button" data-go="home">Home</button>
     <button class="nav-btn" type="button" data-go="search">Search</button>
-    <button class="nav-btn" type="button" data-go="friends">Friends</button>
-    <button class="nav-btn" type="button" data-go="messages">Messages</button>
+    <button class="nav-btn" type="button" data-go="friends">Friends<span class="badge" id="friend-badge" hidden>0</span></button>
+    <button class="nav-btn" type="button" data-go="messages">Messages<span class="badge" id="message-badge" hidden>0</span></button>
     <button class="nav-btn" type="button" data-go="notifications">Alerts<span class="badge" id="badge" hidden>0</span></button>
     <button class="nav-btn" type="button" data-go="profile">Profile</button>
     <button class="nav-btn" type="button" data-go="settings">Settings</button>
@@ -210,8 +226,9 @@ export function renderWebview(webview: Webview, state: HostState): string {
     </section>
 
     <section data-screen="home" class="stack" hidden>
-      <h1>Home</h1>
+      <h1 id="home-title">Home</h1>
       <p class="muted" id="home-copy"></p>
+      <div class="card" id="home-activity"></div>
       <div class="row">
         <button class="btn" type="button" data-go="search">Search</button>
         <button class="btn" type="button" data-go="friends">Friends</button>
@@ -225,8 +242,8 @@ export function renderWebview(webview: Webview, state: HostState): string {
     <section data-screen="search" class="stack" hidden>
       <h1>Search</h1>
       <form id="search-form" class="stack">
-        <label>Find people<input name="query" required maxlength="80"></label>
-        <button class="btn primary" type="submit">Search</button>
+        <label>Find people<input id="search-query" name="query" maxlength="80" placeholder="Name or username"></label>
+        <p class="muted" id="search-status" hidden>Searching…</p>
       </form>
       <div id="search-list" class="stack"></div>
     </section>
@@ -252,11 +269,11 @@ export function renderWebview(webview: Webview, state: HostState): string {
     <section data-screen="messages" class="stack" hidden>
       <h1>Messages</h1>
       <p class="muted" id="crypto-note"></p>
-      <button class="btn" type="button" id="reload-chats">Refresh</button>
       <div id="chat-list" class="stack"></div>
       <div id="thread" class="stack" hidden>
         <p class="muted" id="thread-title"></p>
-        <div id="message-list" class="stack"></div>
+        <div id="message-list"></div>
+        <button class="btn" type="button" id="jump-latest" hidden>New messages</button>
         <form id="message-form" class="stack">
           <label>Message<textarea name="text" required maxlength="4000"></textarea></label>
           <button class="btn primary" type="submit">Send</button>
@@ -302,12 +319,16 @@ export function renderWebview(webview: Webview, state: HostState): string {
       <button class="btn" type="button" id="logout-btn">Log out</button>
     </section>
   </main>
+  <p class="toast" id="toast" hidden></p>
 </div>
 <script nonce="${nonce}">
 (() => {
   const vscode = acquireVsCodeApi();
   const screens = ["splash","login","signup","forgot","reset","home","search","user","friends","messages","notifications","profile","settings"];
   let state = ${initialState};
+  let toastSeq = -1;
+  let toastTimer = 0;
+  let searchTimer = 0;
 
   function esc(value) {
     return String(value ?? "").replace(/[&<>"']/g, (ch) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" })[ch]);
@@ -341,6 +362,24 @@ export function renderWebview(webview: Webview, state: HostState): string {
     const badge = document.getElementById("badge");
     badge.hidden = !(state.unreadNotifications > 0);
     badge.textContent = String(state.unreadNotifications || 0);
+    const friendBadge = document.getElementById("friend-badge");
+    const requestCount = (state.incomingRequests || []).length;
+    friendBadge.hidden = requestCount < 1;
+    friendBadge.textContent = String(requestCount);
+    const messageBadge = document.getElementById("message-badge");
+    messageBadge.hidden = !(state.unreadMessages > 0);
+    messageBadge.textContent = String(state.unreadMessages || 0);
+    const live = document.getElementById("live-status");
+    live.hidden = state.connection !== "reconnecting" && state.connection !== "connecting";
+    live.textContent = state.connection === "reconnecting" ? "Reconnecting…" : "Connecting…";
+    const toast = document.getElementById("toast");
+    if (state.toast && state.toastSeq !== toastSeq) {
+      toastSeq = state.toastSeq;
+      toast.hidden = false;
+      toast.textContent = state.toast;
+      window.clearTimeout(toastTimer);
+      toastTimer = window.setTimeout(() => { toast.hidden = true; }, 4000);
+    }
     document.getElementById("http-warn").hidden = !state.insecureHttp;
     const cryptoNote = document.getElementById("crypto-note");
     if (cryptoNote) {
@@ -348,9 +387,13 @@ export function renderWebview(webview: Webview, state: HostState): string {
         ? "Messages are encrypted on this device for every verified device your friend has published. The server stores ciphertext only."
         : "Encryption keys are not ready on this device yet.";
     }
-    document.getElementById("home-copy").textContent = state.user ? ("Signed in as @" + state.user.username) : "";
-    people(document.getElementById("search-list"), state.searchResults || [], "No users found.");
-    people(document.getElementById("friends-list"), state.friends || [], "No friends yet.");
+    document.getElementById("home-title").textContent = state.user ? ("Hello, " + (state.user.displayName || state.user.username)) : "Home";
+    document.getElementById("home-copy").textContent = state.user ? ("@" + state.user.username) : "";
+    document.getElementById("home-activity").textContent = state.user
+      ? ((state.incomingRequests || []).length + " friend request(s) · " + (state.unreadMessages || 0) + " new message(s) · " + (state.unreadNotifications || 0) + " alert(s)")
+      : "";
+    people(document.getElementById("search-list"), state.searchResults || [], "No developers found. Try another name.");
+    people(document.getElementById("friends-list"), state.friends || [], "No friends yet. Search for a developer to connect.");
     document.getElementById("incoming-list").innerHTML = (state.incomingRequests || []).length ? state.incomingRequests.map((r) =>
       '<div class="card"><strong>' + esc(r.counterpart && r.counterpart.displayName) + '</strong><div class="row"><button class="btn primary" data-act="accept" data-id="' + esc(r.id) + '">Accept</button><button class="btn" data-act="reject" data-id="' + esc(r.id) + '">Reject</button></div></div>'
     ).join("") : '<p class="muted">No incoming requests.</p>';
@@ -358,17 +401,23 @@ export function renderWebview(webview: Webview, state: HostState): string {
       '<div class="card"><strong>' + esc(r.counterpart && r.counterpart.displayName) + '</strong><span class="muted">' + esc(r.status) + '</span></div>'
     ).join("") : '<p class="muted">No outgoing requests.</p>';
     document.getElementById("chat-list").innerHTML = (state.conversations || []).length ? state.conversations.map((c) =>
-      '<div class="card"><button class="btn" data-act="open-chat" data-id="' + esc(c.id) + '">Open ' + esc((c.participantIds || []).join(", ")) + '</button></div>'
-    ).join("") : '<p class="muted">No conversations yet.</p>';
+      '<div class="card"><button class="linkish" data-act="open-chat" data-id="' + esc(c.id) + '">Conversation</button><span class="muted">' + esc((c.participantIds || []).filter((id) => !state.user || id !== state.user.id).join(", ") || "Direct message") + '</span></div>'
+    ).join("") : '<p class="muted">No conversations yet. Message a friend to start one.</p>';
     const thread = document.getElementById("thread");
     thread.hidden = !state.activeConversationId || visible !== "messages";
-    document.getElementById("thread-title").textContent = state.activeConversationId ? ("Conversation " + state.activeConversationId) : "";
-    document.getElementById("message-list").innerHTML = (state.messages || []).map((m) =>
-      '<div class="msg' + (state.user && m.senderId === state.user.id ? " mine" : "") + '">' + esc(m.displayText) + '<div class="muted">' + esc(m.status) + '</div></div>'
-    ).join("") || '<p class="muted">No messages yet.</p>';
+    document.getElementById("thread-title").textContent = state.activeConversationId ? "Conversation" : "";
+    const list = document.getElementById("message-list");
+    const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 48;
+    const ordered = (state.messages || []).slice().reverse();
+    list.innerHTML = ordered.map((m) => {
+      const mine = state.user && m.senderId === state.user.id;
+      return '<div class="msg ' + (mine ? "mine" : "theirs") + '">' + esc(m.displayText) + '<div class="muted">' + esc(m.createdAt || "") + " · " + esc(m.status) + '</div></div>';
+    }).join("") || '<p class="muted">No messages yet. Say hello.</p>';
+    if (nearBottom || ordered.length < 2) list.scrollTop = list.scrollHeight;
+    document.getElementById("jump-latest").hidden = nearBottom || !state.activeConversationId;
     document.getElementById("note-list").innerHTML = (state.notifications || []).length ? state.notifications.map((n) =>
       '<div class="card"><button class="btn" data-act="open-note" data-id="' + esc(n.id) + '">' + esc(n.message) + '</button><span class="muted">' + esc(n.type) + (n.read ? " · read" : " · unread") + '</span></div>'
-    ).join("") : '<p class="muted">No notifications.</p>';
+    ).join("") : '<p class="muted">No notifications yet.</p>';
     if (state.user) {
       document.getElementById("me-line").textContent = "@" + state.user.username + (state.user.email ? " · " + state.user.email : "") + " · " + (state.user.accountType || "PUBLIC");
       const form = document.getElementById("profile-form");
@@ -433,9 +482,24 @@ export function renderWebview(webview: Webview, state: HostState): string {
   document.getElementById("profile-form").addEventListener("submit", (e) => { e.preventDefault(); const d = new FormData(e.target); vscode.postMessage({ version: 1, type: "updateProfile", displayName: String(d.get("displayName")||""), bio: String(d.get("bio")||""), accountType: String(d.get("accountType")||"PUBLIC") }); });
   document.getElementById("password-form").addEventListener("submit", (e) => { e.preventDefault(); const d = new FormData(e.target); vscode.postMessage({ version: 1, type: "changePassword", currentPassword: String(d.get("currentPassword")||""), newPassword: String(d.get("newPassword")||"") }); e.target.reset(); });
   document.getElementById("message-form").addEventListener("submit", (e) => { e.preventDefault(); if (!state.activeConversationId) return; const d = new FormData(e.target); vscode.postMessage({ version: 1, type: "sendMessage", conversationId: state.activeConversationId, text: String(d.get("text")||"") }); e.target.reset(); });
-  document.getElementById("search-form").addEventListener("submit", (e) => { e.preventDefault(); const d = new FormData(e.target); vscode.postMessage({ version: 1, type: "searchUsers", query: String(d.get("query")||"") }); });
+  document.getElementById("search-form").addEventListener("submit", (event) => event.preventDefault());
+  document.getElementById("search-query").addEventListener("input", (event) => {
+    const query = event.target instanceof HTMLInputElement ? event.target.value.trim() : "";
+    window.clearTimeout(searchTimer);
+    const status = document.getElementById("search-status");
+    if (query.length < 2) { status.hidden = true; return; }
+    status.hidden = false;
+    searchTimer = window.setTimeout(() => {
+      status.hidden = true;
+      vscode.postMessage({ version: 1, type: "searchUsers", query });
+    }, 300);
+  });
+  document.getElementById("jump-latest").addEventListener("click", () => {
+    const list = document.getElementById("message-list");
+    list.scrollTop = list.scrollHeight;
+    document.getElementById("jump-latest").hidden = true;
+  });
   document.getElementById("reload-social").addEventListener("click", () => vscode.postMessage({ version: 1, type: "loadSocial" }));
-  document.getElementById("reload-chats").addEventListener("click", () => vscode.postMessage({ version: 1, type: "loadConversations" }));
   document.getElementById("reload-notes").addEventListener("click", () => vscode.postMessage({ version: 1, type: "loadNotifications" }));
   document.getElementById("read-all").addEventListener("click", () => vscode.postMessage({ version: 1, type: "markAllNotificationsRead" }));
   document.getElementById("reload-me").addEventListener("click", () => vscode.postMessage({ version: 1, type: "refreshProfile" }));
@@ -475,6 +539,10 @@ export function createStateMessage(state: HostState): HostMessage {
     messages: state.messages.map((message) => ({ ...message })),
     notifications: [...state.notifications],
     unreadNotifications: state.unreadNotifications,
+    unreadMessages: state.unreadMessages,
+    connection: state.connection,
+    toast: state.toast,
+    toastSeq: state.toastSeq,
     devices: [...state.devices],
   };
 }

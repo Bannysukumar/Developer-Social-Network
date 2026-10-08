@@ -1,8 +1,9 @@
 import type { ApiConfig } from "../api/config";
-import type { MessageDto } from "../shared/api-types";
 import { notificationDestination, resolveScreen, type ScreenId } from "../shared/flow";
 import { webviewMessageSchema } from "../shared/protocol";
 import type { AuthService } from "./auth-service";
+import { messageFromFrame, notificationFromFrame, type ServerFrame, type SocketStatus } from "./chat-socket";
+import { mergeLiveMessage, mergeNotification, mergeReceipt } from "./realtime-state";
 import { emptyHostState, type HostState } from "./webview";
 
 export class SessionFlow {
@@ -22,6 +23,12 @@ export class SessionFlow {
   private messages: HostState["messages"] = [];
   private notifications: HostState["notifications"] = [];
   private unreadNotifications = 0;
+  private unreadMessages = 0;
+  private unreadByConversation: Record<string, number> = {};
+  private seenMessageIds = new Set<string>();
+  private connection: HostState["connection"] = "offline";
+  private toast: string | null = null;
+  private toastSeq = 0;
   private devices: HostState["devices"] = [];
   constructor(
     private readonly auth: AuthService,
@@ -63,6 +70,10 @@ export class SessionFlow {
       messages: this.messages,
       notifications: this.notifications,
       unreadNotifications: this.unreadNotifications,
+      unreadMessages: this.unreadMessages,
+      connection: this.connection,
+      toast: this.toast,
+      toastSeq: this.toastSeq,
       devices: this.devices,
     };
   }
@@ -71,10 +82,59 @@ export class SessionFlow {
     this.onChange();
   }
 
-  ingestLiveMessage(message: MessageDto): void {
-    if (message.conversationId !== this.activeConversationId) return;
-    if (this.messages.some((item) => item.id === message.id)) return;
-    this.messages = [this.auth.displayMessage(message), ...this.messages];
+  setConnection(status: SocketStatus, recovered: boolean): void {
+    const previous = this.connection;
+    this.connection = status;
+    if (status === "connected" && recovered && previous !== "connected") {
+      this.toast = "Connection restored";
+      this.toastSeq += 1;
+      void this.reconcileQuiet();
+    }
+    this.pushState();
+  }
+
+  ingestFrame(frame: ServerFrame): void {
+    const message = messageFromFrame(frame);
+    if (message) {
+      if (this.seenMessageIds.has(message.id)) return;
+      this.seenMessageIds.add(message.id);
+      const patch = mergeLiveMessage(
+        this.messages,
+        message,
+        this.activeConversationId,
+        this.auth.getUser()?.id ?? null,
+        this.toastSeq,
+      );
+      if (patch.messages) this.messages = patch.messages.map((item) => this.auth.displayMessage(item));
+      if (patch.bumpConversation) {
+        this.unreadByConversation[patch.bumpConversation] = (this.unreadByConversation[patch.bumpConversation] ?? 0) + 1;
+        this.unreadMessages = Object.values(this.unreadByConversation).reduce((sum, count) => sum + count, 0);
+      }
+      if (patch.toast) {
+        this.toast = patch.toast;
+        this.toastSeq = patch.toastSeq ?? this.toastSeq;
+      }
+      if (patch.refresh === "conversations") void this.refreshConversationsQuiet();
+      this.pushState();
+      return;
+    }
+    const receipt = mergeReceipt(this.messages, frame);
+    if (receipt) {
+      this.messages = receipt.map((item) => this.auth.displayMessage(item));
+      this.pushState();
+      return;
+    }
+    const note = notificationFromFrame(frame);
+    if (!note) return;
+    const patch = mergeNotification(this.notifications, note, this.unreadNotifications, this.toastSeq);
+    if (patch.notifications) this.notifications = patch.notifications;
+    if (patch.unreadNotifications !== undefined) this.unreadNotifications = patch.unreadNotifications;
+    if (patch.toast) {
+      this.toast = patch.toast;
+      this.toastSeq = patch.toastSeq ?? this.toastSeq;
+    }
+    if (patch.refresh === "social") void this.refreshSocialQuiet();
+    if (patch.refresh === "conversations") void this.refreshConversationsQuiet();
     this.pushState();
   }
 
@@ -102,6 +162,10 @@ export class SessionFlow {
     this.messages = [];
     this.notifications = [];
     this.unreadNotifications = 0;
+    this.unreadMessages = 0;
+    this.unreadByConversation = {};
+    this.seenMessageIds.clear();
+    this.toast = null;
     this.devices = [];
   }
 
@@ -314,6 +378,9 @@ export class SessionFlow {
           });
           this.activeConversationId = opened.conversation.id;
           this.messages = opened.messages;
+          for (const item of opened.messages) this.seenMessageIds.add(item.id);
+          delete this.unreadByConversation[opened.conversation.id];
+          this.unreadMessages = Object.values(this.unreadByConversation).reduce((sum, count) => sum + count, 0);
           this.conversations = await this.auth.listConversations();
           this.show("messages", this.screen !== "messages");
           break;
@@ -376,6 +443,44 @@ export class SessionFlow {
       this.error = this.auth.userFacingError(error);
     } finally {
       this.busy = false;
+      this.pushState();
+    }
+  }
+
+  private async refreshSocialQuiet(): Promise<void> {
+    try {
+      const social = await this.auth.loadSocial();
+      this.friends = social.friends;
+      this.incomingRequests = social.incoming;
+      this.outgoingRequests = social.outgoing;
+      this.pushState();
+    } catch {
+      this.error = "Couldn't refresh friends. Open Friends to try again.";
+      this.pushState();
+    }
+  }
+
+  private async refreshConversationsQuiet(): Promise<void> {
+    try {
+      this.conversations = await this.auth.listConversations();
+      this.pushState();
+    } catch {
+      this.error = "Couldn't refresh messages. Open Messages to try again.";
+      this.pushState();
+    }
+  }
+
+  private async reconcileQuiet(): Promise<void> {
+    await Promise.all([this.refreshSocialQuiet(), this.refreshConversationsQuiet(), this.refreshNotesQuiet()]);
+  }
+
+  private async refreshNotesQuiet(): Promise<void> {
+    try {
+      const notes = await this.auth.loadNotifications();
+      this.notifications = notes.items;
+      this.unreadNotifications = notes.unreadCount;
+      this.pushState();
+    } catch {
       this.pushState();
     }
   }

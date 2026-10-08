@@ -10,6 +10,7 @@ import com.devconnect.socialnetwork.exception.ResourceNotFoundException;
 import com.devconnect.socialnetwork.repository.NotificationRepository;
 import com.devconnect.socialnetwork.util.Ids;
 import com.devconnect.socialnetwork.util.Paging;
+import com.devconnect.socialnetwork.websocket.RealtimePublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoTemplate;
@@ -28,11 +29,18 @@ public class NotificationService {
     private final NotificationRepository repository;
     private final MongoTemplate mongoTemplate;
     private final Clock clock;
+    private final RealtimePublisher realtimePublisher;
 
-    public NotificationService(NotificationRepository repository, MongoTemplate mongoTemplate, Clock clock) {
+    public NotificationService(
+            NotificationRepository repository,
+            MongoTemplate mongoTemplate,
+            Clock clock,
+            RealtimePublisher realtimePublisher
+    ) {
         this.repository = repository;
         this.mongoTemplate = mongoTemplate;
         this.clock = clock;
+        this.realtimePublisher = realtimePublisher;
     }
 
     public void notify(String recipientId, NotificationType type, String actorId, String referenceId, String message) {
@@ -46,6 +54,7 @@ public class NotificationService {
         entity.setRead(false);
         entity.setCreatedAt(clock.instant());
         repository.save(entity);
+        realtimePublisher.publish(recipientId, "NOTIFICATION", toResponse(entity));
     }
 
     public void notifyNewMessage(String recipientId, String actorId, String conversationId) {
