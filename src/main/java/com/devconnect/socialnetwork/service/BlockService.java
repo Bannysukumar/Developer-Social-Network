@@ -9,6 +9,7 @@ import com.devconnect.socialnetwork.exception.ForbiddenException;
 import com.devconnect.socialnetwork.exception.InvalidStateException;
 import com.devconnect.socialnetwork.exception.ResourceNotFoundException;
 import com.devconnect.socialnetwork.repository.BlockRepository;
+import com.devconnect.socialnetwork.repository.ConversationRepository;
 import com.devconnect.socialnetwork.repository.UserRepository;
 import com.devconnect.socialnetwork.util.Ids;
 import org.springframework.data.mongodb.core.MongoTemplate;
@@ -28,6 +29,7 @@ import java.util.Set;
 public class BlockService {
 
     private final BlockRepository blockRepository;
+    private final ConversationRepository conversationRepository;
     private final UserRepository userRepository;
     private final FriendshipService friendshipService;
     private final AuditService auditService;
@@ -36,6 +38,7 @@ public class BlockService {
 
     public BlockService(
             BlockRepository blockRepository,
+            ConversationRepository conversationRepository,
             UserRepository userRepository,
             FriendshipService friendshipService,
             AuditService auditService,
@@ -43,6 +46,7 @@ public class BlockService {
             Clock clock
     ) {
         this.blockRepository = blockRepository;
+        this.conversationRepository = conversationRepository;
         this.userRepository = userRepository;
         this.friendshipService = friendshipService;
         this.auditService = auditService;
@@ -106,7 +110,6 @@ public class BlockService {
             block.setBlockedId(targetUserId);
             block.setCreatedAt(clock.instant());
             blockRepository.save(block);
-            friendshipService.removePair(userId, targetUserId);
             cancelPending(userId, targetUserId);
             auditService.record(AuditEventType.USER_BLOCKED, userId, Map.of("targetUserId", targetUserId));
         }
@@ -120,6 +123,9 @@ public class BlockService {
             throw new ResourceNotFoundException("Resource not found");
         }
         blockRepository.deleteByBlockerIdAndBlockedId(userId, targetUserId);
+        if (conversationRepository.findByParticipantKey(Ids.conversationKey(userId, targetUserId)).isPresent()) {
+            friendshipService.createFriendship(userId, targetUserId);
+        }
         auditService.record(AuditEventType.USER_UNBLOCKED, userId, Map.of("targetUserId", targetUserId));
         return status(userId, targetUserId);
     }

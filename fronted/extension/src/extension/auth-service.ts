@@ -38,7 +38,7 @@ export interface AuthServiceOptions {
 
 export class AuthService {
   private readonly session: SessionStore;
-  private readonly peerNames = new Map<string, { displayName: string; username: string }>();
+  private readonly peerNames = new Map<string, { displayName: string; username: string; profileImageUrl?: string | null }>();
   private client: ApiClient;
   private authApi: AuthApi;
   private usersApi: UsersApi;
@@ -194,7 +194,8 @@ export class AuthService {
       headers: { Authorization: `Bearer ${token}`, Accept: "image/*" },
       cache: "no-store",
     });
-    if (!response.ok) return undefined;
+    if (response.status === 404) return undefined;
+    if (!response.ok) throw new Error("Profile picture could not be loaded.");
     const type = response.headers.get("content-type") ?? "";
     if (!type.startsWith("image/")) return undefined;
     const bytes = Buffer.from(await response.arrayBuffer());
@@ -257,12 +258,24 @@ export class AuthService {
     const otherId = conversation.participantIds.find((id) => id !== selfId);
     if (!otherId) return conversation;
     const cached = this.peerNames.get(otherId);
-    if (cached) return { ...conversation, peerDisplayName: cached.displayName, peerUsername: cached.username };
+    if (cached && "profileImageUrl" in cached) {
+      return {
+        ...conversation,
+        peerDisplayName: cached.displayName,
+        peerUsername: cached.username,
+        peerProfileImageUrl: cached.profileImageUrl,
+      };
+    }
     try {
       const profile = await this.usersApi.get(otherId);
-      const peer = { displayName: profile.displayName, username: profile.username };
+      const peer = { displayName: profile.displayName, username: profile.username, profileImageUrl: profile.profileImageUrl };
       this.peerNames.set(otherId, peer);
-      return { ...conversation, peerDisplayName: peer.displayName, peerUsername: peer.username };
+      return {
+        ...conversation,
+        peerDisplayName: peer.displayName,
+        peerUsername: peer.username,
+        peerProfileImageUrl: peer.profileImageUrl,
+      };
     } catch {
       return conversation;
     }

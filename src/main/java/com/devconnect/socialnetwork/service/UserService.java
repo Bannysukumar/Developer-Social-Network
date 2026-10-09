@@ -210,7 +210,13 @@ public class UserService {
             } else if (pending.containsKey(user.getId())) {
                 view = pending.get(user.getId());
             }
-            summaries.add(userMapper.toSummary(user, view, viewerId));
+            UserSummaryResponse summary = userMapper.toSummary(user, view, viewerId);
+            if (user.getAccountType() == AccountType.PRIVATE && view != RelationshipView.FRIENDS) {
+                summary = new UserSummaryResponse(
+                        summary.id(), summary.username(), summary.displayName(), null,
+                        summary.accountType(), summary.relationship(), summary.presence());
+            }
+            summaries.add(summary);
         }
         int totalPages = pageable.getPageSize() == 0 ? 0 : (int) Math.ceil((double) total / pageable.getPageSize());
         return new PageResponse<>(summaries, pageable.getPageNumber(), pageable.getPageSize(), total, totalPages,
@@ -224,7 +230,10 @@ public class UserService {
         }
         UserEntity owner = userRepository.findById(file.getOwnerId())
                 .orElseThrow(() -> new ResourceNotFoundException("Resource not found"));
-        if (owner.getStatus() != AccountStatus.ACTIVE || blockService.status(viewerId, owner.getId()).blockedMe()) {
+        if (owner.getStatus() != AccountStatus.ACTIVE || blockService.eitherBlocked(viewerId, owner.getId())) {
+            throw new ResourceNotFoundException("Resource not found");
+        }
+        if (owner.getAccountType() == AccountType.PRIVATE && !friendshipService.areFriends(viewerId, owner.getId())) {
             throw new ResourceNotFoundException("Resource not found");
         }
         if (!fileId.equals(owner.getProfileImageFileId())) {

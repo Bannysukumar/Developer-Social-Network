@@ -18,7 +18,7 @@ import com.devconnect.socialnetwork.repository.UserRepository;
 import com.devconnect.socialnetwork.util.Ids;
 import com.devconnect.socialnetwork.util.Paging;
 import org.springframework.dao.DuplicateKeyException;
-import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.FindAndModifyOptions;
 import org.springframework.data.mongodb.core.MongoTemplate;
@@ -32,6 +32,7 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 @Service
 public class FriendRequestService {
@@ -147,15 +148,31 @@ public class FriendRequestService {
     }
 
     public PageResponse<FriendRequestResponse> incoming(String userId, int page, int size) {
-        Page<FriendRequestEntity> result = repository.findByRecipientIdAndStatus(
-                userId, FriendRequestStatus.PENDING, Paging.page(page, size, 50, Sort.by(Sort.Direction.DESC, "createdAt")));
-        return Paging.map(result, result.getContent().stream().map(request -> toResponse(request, userId)).toList());
+        return listRequests(userId, page, size, true);
     }
 
     public PageResponse<FriendRequestResponse> outgoing(String userId, int page, int size) {
-        Page<FriendRequestEntity> result = repository.findBySenderIdAndStatus(
-                userId, FriendRequestStatus.PENDING, Paging.page(page, size, 50, Sort.by(Sort.Direction.DESC, "createdAt")));
-        return Paging.map(result, result.getContent().stream().map(request -> toResponse(request, userId)).toList());
+        return listRequests(userId, page, size, false);
+    }
+
+    private PageResponse<FriendRequestResponse> listRequests(String userId, int page, int size, boolean incoming) {
+        Set<String> hidden = blockService.hiddenUserIds(userId);
+        String ownerField = incoming ? "recipientId" : "senderId";
+        String otherField = incoming ? "senderId" : "recipientId";
+        Criteria criteria = Criteria.where(ownerField).is(userId).and("status").is(FriendRequestStatus.PENDING);
+        if (!hidden.isEmpty()) {
+            criteria = criteria.and(otherField).nin(hidden);
+        }
+        Pageable pageable = Paging.page(page, size, 50, Sort.by(Sort.Direction.DESC, "createdAt"));
+        Query query = Query.query(criteria);
+        long total = mongoTemplate.count(query, FriendRequestEntity.class);
+        query.with(pageable);
+        List<FriendRequestResponse> items = mongoTemplate.find(query, FriendRequestEntity.class).stream()
+                .map(request -> toResponse(request, userId))
+                .toList();
+        int totalPages = pageable.getPageSize() == 0 ? 0 : (int) Math.ceil((double) total / pageable.getPageSize());
+        return new PageResponse<>(items, pageable.getPageNumber(), pageable.getPageSize(), total, totalPages,
+                (long) (pageable.getPageNumber() + 1) * pageable.getPageSize() < total);
     }
 
     public Map<String, RelationshipView> pendingViews(String userId, Collection<String> otherIds) {

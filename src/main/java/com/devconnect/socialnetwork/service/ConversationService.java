@@ -15,12 +15,16 @@ import com.devconnect.socialnetwork.repository.UserRepository;
 import com.devconnect.socialnetwork.util.Ids;
 import com.devconnect.socialnetwork.util.Paging;
 import org.springframework.dao.DuplicateKeyException;
-import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.stereotype.Service;
 
 import java.time.Clock;
 import java.util.List;
+import java.util.Set;
 
 @Service
 public class ConversationService {
@@ -29,6 +33,7 @@ public class ConversationService {
     private final UserRepository userRepository;
     private final FriendshipService friendshipService;
     private final BlockService blockService;
+    private final MongoTemplate mongoTemplate;
     private final Clock clock;
 
     public ConversationService(
@@ -36,12 +41,14 @@ public class ConversationService {
             UserRepository userRepository,
             FriendshipService friendshipService,
             BlockService blockService,
+            MongoTemplate mongoTemplate,
             Clock clock
     ) {
         this.repository = repository;
         this.userRepository = userRepository;
         this.friendshipService = friendshipService;
         this.blockService = blockService;
+        this.mongoTemplate = mongoTemplate;
         this.clock = clock;
     }
 
@@ -83,9 +90,21 @@ public class ConversationService {
     }
 
     public PageResponse<ConversationResponse> list(String userId, int page, int size) {
-        Page<ConversationEntity> result = repository.findByParticipantIdsContaining(
-                userId, Paging.page(page, size, 50, Sort.by(Sort.Direction.DESC, "updatedAt")));
-        return Paging.map(result, result.getContent().stream().map(this::toResponse).toList());
+        Set<String> hidden = blockService.hiddenUserIds(userId);
+        Pageable pageable = Paging.page(page, size, 50, Sort.by(Sort.Direction.DESC, "updatedAt"));
+        Criteria criteria = Criteria.where("participantIds").is(userId);
+        if (!hidden.isEmpty()) {
+            criteria = new Criteria().andOperator(criteria, Criteria.where("participantIds").nin(hidden));
+        }
+        Query query = Query.query(criteria);
+        long total = mongoTemplate.count(query, ConversationEntity.class);
+        query.with(pageable);
+        List<ConversationResponse> items = mongoTemplate.find(query, ConversationEntity.class).stream()
+                .map(this::toResponse)
+                .toList();
+        int totalPages = pageable.getPageSize() == 0 ? 0 : (int) Math.ceil((double) total / pageable.getPageSize());
+        return new PageResponse<>(items, pageable.getPageNumber(), pageable.getPageSize(), total, totalPages,
+                (long) (pageable.getPageNumber() + 1) * pageable.getPageSize() < total);
     }
 
     public ConversationResponse get(String userId, String conversationId) {

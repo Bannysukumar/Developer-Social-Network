@@ -665,7 +665,13 @@ export class SessionFlow {
           this.notice = "User blocked.";
           this.searchResults = this.searchResults.filter((user) => user.id !== message.userId);
           this.blockedUsers = await this.auth.blockedUsers();
-          if (this.peerId() === message.userId) this.messageLock = "blocked-by-me";
+          if (this.peerId() === message.userId) {
+            this.messageLock = "blocked-by-me";
+            this.activeConversationId = null;
+            this.messages = [];
+          }
+          this.friends = this.friends.filter((user) => user.id !== message.userId);
+          this.conversations = (await this.auth.listConversations()).filter((conversation) => !conversation.participantIds.includes(message.userId));
           await this.refreshSocialAndUser(message.userId);
           break;
         case "unblockUser":
@@ -673,6 +679,7 @@ export class SessionFlow {
           this.notice = "User unblocked.";
           this.blockedUsers = this.blockedUsers.filter((user) => user.id !== message.userId);
           if (this.peerId() === message.userId) await this.syncMessageLock();
+          this.conversations = await this.auth.listConversations();
           await this.refreshSocialAndUser(message.userId);
           break;
         case "loadConversations":
@@ -739,7 +746,7 @@ export class SessionFlow {
               this.error = text;
               break;
             }
-            if (/can't interact|Only friends can exchange messages/.test(text)) {
+            if (/can't interact|Only friends can exchange messages|Key material is available to friends|Only friends can start a conversation/.test(text)) {
               this.messages = this.messages.filter((item) => item.id !== localId);
               const lock = await this.syncMessageLock();
               this.error = lock === "blocked-me" ? "You can't message this user." : text;
@@ -919,6 +926,7 @@ export class SessionFlow {
       ...this.blockedUsers.map((user) => user.profileImageUrl),
       ...this.incomingRequests.map((request) => request.counterpart.profileImageUrl),
       ...this.outgoingRequests.map((request) => request.counterpart.profileImageUrl),
+      ...this.conversations.map((conversation) => conversation.peerProfileImageUrl),
     ];
     for (const url of urls) {
       const id = url?.split("/").filter(Boolean).pop();
@@ -926,9 +934,9 @@ export class SessionFlow {
       try {
         const data = await this.auth.avatarDataUrl(id);
         if (data) this.avatars = { ...this.avatars, [id]: data };
-        else this.avatarMisses.add(id);
+        else if (data === undefined) this.avatarMisses.add(id);
       } catch {
-        this.avatarMisses.add(id);
+        // A network failure should not hide the picture on the next refresh.
       }
     }
   }

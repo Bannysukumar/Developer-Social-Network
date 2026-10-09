@@ -44,7 +44,7 @@ public class UserMapper {
                 user.getUsername(),
                 user.getDisplayName(),
                 limited ? null : user.getBio(),
-                imageUrl(user),
+                limited ? null : imageUrl(user),
                 user.getAccountType(),
                 null,
                 null,

@@ -131,6 +131,7 @@ export const conversationSchema = z.object({
   updatedAt: z.string().optional(),
   peerDisplayName: z.string().optional(),
   peerUsername: z.string().optional(),
+  peerProfileImageUrl: z.string().nullable().optional(),
 }).passthrough();
 
 export type ConversationDto = z.infer<typeof conversationSchema>;
