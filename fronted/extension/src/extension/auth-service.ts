@@ -391,13 +391,17 @@ export class AuthService {
       }
       const sealed = sealFile(file.bytes);
       const stored = await this.conversationsApi.uploadAttachment(conversationId, sealed.ciphertext);
+      const mime = file.mime || "application/octet-stream";
       uploaded.push({
         id: stored.id,
         name: file.name.replace(/[\\/]/g, "_").slice(0, 180),
         size: file.bytes.length,
-        mime: file.mime || "application/octet-stream",
+        mime,
         key: sealed.key,
         iv: sealed.iv,
+        preview: mime.startsWith("image/") && file.bytes.length <= 8_000_000
+          ? `data:${mime};base64,${file.bytes.toString("base64")}`
+          : undefined,
       });
     }
     const conversation = await this.conversationsApi.get(conversationId);
@@ -416,7 +420,14 @@ export class AuthService {
       keyId: String(recipients[0]?.oneTimePreKey?.preKeyId ?? recipients[0]?.signedPreKey.preKeyId ?? ""),
       attachmentIds: uploaded.map((file) => file.id),
     });
-    return this.displayMessage(message);
+    const shown = this.displayMessage(message);
+    return {
+      ...shown,
+      attachments: shown.attachments?.map((item) => {
+        const source = uploaded.find((file) => file.id === item.id);
+        return source?.preview ? { ...item, preview: source.preview } : item;
+      }),
+    };
   }
 
   async downloadAttachment(attachmentId: string, key: string, iv: string): Promise<Uint8Array> {

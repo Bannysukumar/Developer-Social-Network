@@ -186,6 +186,37 @@ describe("central API client", () => {
     expect(requests).toBe(0);
   });
 
+  test("uploads ciphertext as raw bytes and downloads it without text decoding", async () => {
+    const ciphertext = Uint8Array.from([0xff, 0xd8, 0x00, 0x01, 0xc3, 0x28]);
+    let upload: RequestInit | undefined;
+    const client = new ApiClient(config, {
+      fetcher: async (_input, init) => {
+        upload = init;
+        if (init?.method === "GET") {
+          return new Response(ciphertext, { status: 200, headers: { "Content-Type": "application/octet-stream" } });
+        }
+        return jsonResponse({ success: true, message: "ok", data: { id: "att-1", size: ciphertext.byteLength } }, 201);
+      },
+      getAccessToken: async () => "access-token",
+    });
+    await client.request("conversations/c1/attachments", z.object({ id: z.string(), size: z.number() }), {
+      method: "POST",
+      rawBody: ciphertext,
+    });
+    const headers = new Headers(upload?.headers);
+    expect(headers.get("content-type")).toBe("application/octet-stream");
+    expect(headers.get("authorization")).toBe("Bearer access-token");
+    expect(upload?.body).toBeInstanceOf(Uint8Array);
+    expect(Array.from(upload?.body as Uint8Array)).toEqual(Array.from(ciphertext));
+    expect(typeof upload?.body).not.toBe("string");
+
+    const downloaded = await client.bytes("attachments/att-1");
+    expect(Array.from(downloaded)).toEqual(Array.from(ciphertext));
+    const downloadHeaders = new Headers(upload?.headers);
+    expect(downloadHeaders.get("accept")).toBe("application/octet-stream");
+    expect(downloadHeaders.get("authorization")).toBe("Bearer access-token");
+  });
+
   test("returns a normalized timeout when the fetcher honors abort", async () => {
     const shortConfig = createApiConfig({ baseUrl: "https://api.example.test/api/v1", timeoutMs: 10 });
     const client = new ApiClient(shortConfig, {

@@ -13,12 +13,14 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
+import jakarta.servlet.http.HttpServletRequest;
+
+import java.io.IOException;
 import java.io.InputStream;
 
 @RestController
@@ -36,8 +38,23 @@ public class AttachmentController {
     public ResponseEntity<ApiResponse<AttachmentCreatedResponse>> upload(
             @PathVariable String conversationId,
             @RequestParam("file") MultipartFile file
-    ) {
-        return ApiResponses.created("Attachment stored", attachmentService.upload(SecurityUtils.currentUserId(), conversationId, file));
+    ) throws IOException {
+        return ApiResponses.created(
+                "Attachment stored",
+                attachmentService.upload(SecurityUtils.currentUserId(), conversationId, file.getInputStream(), file.getSize())
+        );
+    }
+
+    @PostMapping(value = "/api/v1/conversations/{conversationId}/attachments", consumes = MediaType.APPLICATION_OCTET_STREAM_VALUE)
+    @Operation(summary = "Store raw ciphertext bytes for a file the caller may send in this conversation")
+    public ResponseEntity<ApiResponse<AttachmentCreatedResponse>> uploadRaw(
+            @PathVariable String conversationId,
+            HttpServletRequest request
+    ) throws IOException {
+        return ApiResponses.created(
+                "Attachment stored",
+                attachmentService.upload(SecurityUtils.currentUserId(), conversationId, request.getInputStream(), request.getContentLengthLong())
+        );
     }
 
     @GetMapping("/api/v1/attachments/{attachmentId}")

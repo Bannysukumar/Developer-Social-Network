@@ -6,6 +6,7 @@ export interface SharedFile {
   readonly key: string;
   readonly iv: string;
   readonly preview?: string;
+  readonly loadError?: boolean;
 }
 
 export interface FilePayload {

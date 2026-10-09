@@ -50,6 +50,10 @@ export class SessionFlow {
   private readInflight = new Set<string>();
   private readAgain = new Set<string>();
   private hiddenPresence = new Set<string>();
+  private imagePreviews = new Map<string, string>();
+  private imageErrors = new Set<string>();
+  private imageFlight = new Map<string, number>();
+  private imageEpoch = new Map<string, number>();
   private pendingFiles = new Map<string, { conversationId: string; text: string; clientMessageId: string; files: { name: string; mime: string; bytes: Buffer }[] }>();
   private blockEpoch = new Map<string, number>();
   constructor(
@@ -93,7 +97,7 @@ export class SessionFlow {
       outgoingRequests: this.outgoingRequests,
       conversations: this.conversations,
       activeConversationId: this.activeConversationId,
-      messages: this.messages,
+      messages: this.decorateMessages(this.messages),
       notifications: this.notifications,
       unreadNotifications: this.unreadNotifications,
       unreadMessages: this.unreadMessages,
@@ -125,6 +129,7 @@ export class SessionFlow {
 
   private pushState(): void {
     this.onChange();
+    this.scheduleImages();
   }
 
   setConnection(status: SocketStatus, recovered: boolean): void {
@@ -321,6 +326,11 @@ export class SessionFlow {
     this.avatarMisses.clear();
     this.hiddenPresence.clear();
     this.blockEpoch.clear();
+    this.imagePreviews.clear();
+    this.imageErrors.clear();
+    this.imageFlight.clear();
+    this.imageEpoch.clear();
+    this.pendingFiles.clear();
     this.messageLock = "none";
   }
 
@@ -814,12 +824,25 @@ export class SessionFlow {
             status: "SENT",
             displayText: label,
             sendState: "sending",
-            attachments: files.map((file) => ({ id: localId, name: file.name, size: file.bytes.length, mime: file.mime, key: "", iv: "" })),
+            attachments: files.map((file, index) => ({
+              id: `${localId}-${index}`,
+              name: file.name,
+              size: file.bytes.length,
+              mime: file.mime,
+              key: "",
+              iv: "",
+              preview: file.mime.startsWith("image/") && file.bytes.length <= 8_000_000
+                ? `data:${file.mime};base64,${file.bytes.toString("base64")}`
+                : undefined,
+            })),
           }, ...this.messages.filter((item) => item.id !== localId)];
           this.pushState();
           try {
             const sent = await this.auth.sendFiles(conversationId, text, files, clientMessageId);
             this.pendingFiles.delete(localId);
+            for (const file of sent.attachments ?? []) {
+              if (file.preview) this.rememberImage(file.id, file.preview);
+            }
             this.seenMessageIds.add(sent.id);
             this.messages = [sent, ...this.messages.filter((item) => item.id !== sent.id && item.id !== localId)];
             this.rememberPreview(conversationId, sent.displayText);
@@ -842,14 +865,27 @@ export class SessionFlow {
           await this.saveFile(message.name.replace(/[\\/]/g, "_"), bytes);
           break;
         }
+        case "reloadImage": {
+          this.imageEpoch.set(message.attachmentId, (this.imageEpoch.get(message.attachmentId) ?? 0) + 1);
+          this.imageErrors.delete(message.attachmentId);
+          this.imagePreviews.delete(message.attachmentId);
+          this.imageFlight.delete(message.attachmentId);
+          this.pushState();
+          break;
+        }
+        case "saveAttachment": {
+          const file = this.messages.flatMap((item) => item.id === message.messageId ? [...(item.attachments ?? [])] : [])
+            .find((item) => item.id === message.attachmentId);
+          if (!file?.key) break;
+          const bytes = await this.auth.downloadAttachment(file.id, file.key, file.iv);
+          await this.saveFile(file.name.replace(/[\\/]/g, "_"), bytes);
+          break;
+        }
         case "previewFile": {
           const bytes = await this.auth.downloadAttachment(message.id, message.key, message.iv);
-          if (!message.mime.startsWith("image/") || bytes.byteLength > 1_500_000) break;
-          const preview = `data:${message.mime};base64,${Buffer.from(bytes).toString("base64")}`;
-          this.messages = this.messages.map((item) => {
-            if (item.id !== message.messageId || !item.attachments) return item;
-            return { ...item, attachments: item.attachments.map((file) => file.id === message.id ? { ...file, preview } : file) };
-          });
+          if (!message.mime.startsWith("image/") || bytes.byteLength > 8_000_000) break;
+          this.rememberImage(message.id, `data:${message.mime};base64,${Buffer.from(bytes).toString("base64")}`);
+          this.imageErrors.delete(message.id);
           break;
         }
         case "loadNotifications": {
@@ -1015,6 +1051,53 @@ export class SessionFlow {
   private rememberPreview(conversationId: string, text: string | undefined): void {
     const preview = text?.trim();
     if (preview) this.conversationPreviews[conversationId] = preview;
+  }
+
+  private decorateMessages<T extends { attachments?: readonly { id: string; preview?: string; loadError?: boolean }[] }>(messages: readonly T[]): T[] {
+    return messages.map((message) => {
+      if (!message.attachments?.length) return message;
+      return {
+        ...message,
+        attachments: message.attachments.map((file) => ({
+          ...file,
+          preview: file.preview || this.imagePreviews.get(file.id),
+          loadError: this.imageErrors.has(file.id) || undefined,
+        })),
+      };
+    });
+  }
+
+  private rememberImage(id: string, dataUrl: string): void {
+    this.imagePreviews.delete(id);
+    this.imagePreviews.set(id, dataUrl);
+    while (this.imagePreviews.size > 32) {
+      const oldest = this.imagePreviews.keys().next().value;
+      if (oldest === undefined) break;
+      this.imagePreviews.delete(oldest);
+    }
+  }
+
+  private scheduleImages(): void {
+    const pending = this.messages.flatMap((message) => message.attachments ?? [])
+      .filter((file) => file.mime.startsWith("image/") && file.key && !file.preview && !this.imagePreviews.has(file.id) && !this.imageErrors.has(file.id) && !this.imageFlight.has(file.id) && file.size <= 8_000_000)
+      .slice(0, 2);
+    for (const file of pending) {
+      const epoch = (this.imageEpoch.get(file.id) ?? 0) + 1;
+      this.imageEpoch.set(file.id, epoch);
+      this.imageFlight.set(file.id, epoch);
+      void this.auth.downloadAttachment(file.id, file.key, file.iv).then((bytes) => {
+        if (this.imageEpoch.get(file.id) !== epoch) return;
+        const mime = file.mime.startsWith("image/") ? file.mime : "image/jpeg";
+        this.rememberImage(file.id, `data:${mime};base64,${Buffer.from(bytes).toString("base64")}`);
+        this.imageErrors.delete(file.id);
+      }).catch(() => {
+        if (this.imageEpoch.get(file.id) !== epoch) return;
+        this.imageErrors.add(file.id);
+      }).finally(() => {
+        if (this.imageFlight.get(file.id) === epoch) this.imageFlight.delete(file.id);
+        if (this.imageEpoch.get(file.id) === epoch) this.pushState();
+      });
+    }
   }
 
   hidesUser(userId: string): boolean {

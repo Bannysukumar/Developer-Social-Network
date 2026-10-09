@@ -228,8 +228,11 @@ export function renderWebview(webview: Webview, state: HostState): string {
   .composer textarea { min-height: 36px; max-height: 120px; }
   .attach-tray { grid-column: 1 / -1; display: flex; gap: 8px; flex-wrap: wrap; }
   .attach-chip { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .attach-chip img { height: 48px; width: auto; max-width: 72px; object-fit: contain; border-radius: 6px; vertical-align: middle; }
   .file-card { display: flex; gap: 8px; align-items: center; margin-top: 6px; }
-  .file-card img { max-width: 220px; max-height: 160px; object-fit: contain; }
+  .image-bubble { display: block; padding: 0; border: 0; background: transparent; max-width: 100%; }
+  .image-bubble img { display: block; max-width: min(240px, 100%); max-height: 280px; width: auto; height: auto; object-fit: contain; border-radius: 12px; }
+  .image-bubble.loading { width: 180px; height: 120px; border-radius: 12px; background: var(--vscode-input-background); }
   .lightbox { position: fixed; inset: 0; background: rgba(0,0,0,.72); display: flex; align-items: center; justify-content: center; z-index: 30; }
   .lightbox img { max-width: 92%; max-height: 92%; object-fit: contain; }
   .send-btn { width: 32px; min-height: 32px; border-radius: 16px; padding: 0; }
@@ -519,7 +522,7 @@ export function renderWebview(webview: Webview, state: HostState): string {
         <button class="btn quiet" type="button" data-settings="menu">Settings</button>
         <h1>About</h1>
         <p>DevConnect</p>
-        <p class="muted" id="about-version">Version 0.4.26</p>
+        <p class="muted" id="about-version">Version 0.4.27</p>
         <p class="muted">A developer network inside Visual Studio Code. Messages stay encrypted on your devices.</p>
       </div>
     </section>
@@ -857,14 +860,17 @@ export function renderWebview(webview: Webview, state: HostState): string {
         ? '<div class="msg-menu">' + (mine && !deleted ? '<button class="btn danger" type="button" data-act="delete-everyone" data-id="' + esc(m.id) + '">Delete for everyone</button>' : "") + '<button class="btn" type="button" data-act="delete-me" data-id="' + esc(m.id) + '">Delete for me</button></div>'
         : "";
       const files = (m.attachments || []).map((file) => {
-        if (!file.key) return '<div class="file-card"><span>' + esc(file.name) + '</span><span class="muted">' + esc(fileSize(file.size)) + '</span></div>';
         if (file.mime && file.mime.startsWith("image/")) {
-          const picture = file.preview
-            ? '<img src="' + esc(file.preview) + '" alt="' + esc(file.name) + '" data-act="open-preview" data-src="' + esc(file.preview) + '">'
-            : '<button class="btn" type="button" data-act="preview-file" data-message="' + esc(m.id) + '" data-id="' + esc(file.id) + '" data-key="' + esc(file.key) + '" data-iv="' + esc(file.iv) + '" data-mime="' + esc(file.mime) + '">View image</button>';
-          return '<div class="file-card">' + picture + '</div>';
+          if (file.preview) {
+            return '<button class="image-bubble" type="button" data-act="open-preview" data-id="' + esc(file.id) + '" data-message="' + esc(m.id) + '"><img src="' + esc(file.preview) + '" alt="' + esc(file.name) + '"></button>';
+          }
+          if (file.loadError) {
+            return '<div class="file-card"><span>Couldn\\'t load this image.</span><button class="btn" type="button" data-act="reload-image" data-id="' + esc(m.id) + '" data-file="' + esc(file.id) + '">Try again</button></div>';
+          }
+          return '<div class="image-bubble loading" role="status" aria-label="Loading image"></div>';
         }
-        return '<div class="file-card"><span>' + esc(file.name) + '</span><span class="muted">' + esc(fileSize(file.size)) + '</span><button class="btn" type="button" data-act="download-file" data-id="' + esc(file.id) + '" data-name="' + esc(file.name) + '" data-key="' + esc(file.key) + '" data-iv="' + esc(file.iv) + '">Save</button></div>';
+        const save = file.key ? '<button class="btn" type="button" data-act="save-attachment" data-id="' + esc(m.id) + '" data-file="' + esc(file.id) + '">Save</button>' : "";
+        return '<div class="file-card"><span>' + esc(file.name) + '</span><span class="muted">' + esc(fileSize(file.size)) + '</span>' + save + '</div>';
       }).join("");
       const retryFiles = (m.attachments || []).length && m.id.indexOf("local-") === 0
         ? '<button class="btn" type="button" data-act="retry-files" data-id="' + esc(m.id) + '">Retry</button>'
@@ -972,8 +978,8 @@ export function renderWebview(webview: Webview, state: HostState): string {
     if (attachBtn) attachBtn.disabled = !!state.busy || lock !== "none";
     const tray = document.getElementById("attach-tray");
     if (tray) {
-      tray.innerHTML = pendingFiles.map((file, index) =>
-        '<span class="attach-chip">' + esc(file.name) + ' <button class="btn quiet" type="button" data-act="remove-file" data-index="' + index + '" aria-label="Remove">×</button></span>'
+      tray.innerHTML = pendingFiles.map((item, index) =>
+        '<span class="attach-chip">' + (item.preview ? '<img src="' + esc(item.preview) + '" alt="">' : esc(item.file.name)) + ' <button class="btn quiet" type="button" data-act="remove-file" data-id="file" data-index="' + index + '" aria-label="Remove">×</button></span>'
       ).join("");
     }
     document.getElementById("device-list").innerHTML = (state.devices || []).length ? state.devices.map((d) =>
@@ -1020,7 +1026,8 @@ export function renderWebview(webview: Webview, state: HostState): string {
     if (go) { vscode.postMessage({ version: 1, type: "navigate", destination: go }); return; }
     const act = target.getAttribute("data-act");
     const id = target.getAttribute("data-id");
-    if (!act || !id || state.busy) return;
+    if (!act || !id) return;
+    if (state.busy && act !== "open-preview" && act !== "save-attachment" && act !== "reload-image" && act !== "retry-files") return;
     if (act === "open-user") vscode.postMessage({ version: 1, type: "openUser", userId: id });
     if (act === "friend") vscode.postMessage({ version: 1, type: "sendFriendRequest", userId: id });
     if (act === "accept") vscode.postMessage({ version: 1, type: "acceptFriendRequest", requestId: id });
@@ -1057,15 +1064,21 @@ export function renderWebview(webview: Webview, state: HostState): string {
       apply(state);
       return;
     }
-    if (act === "preview-file") {
-      vscode.postMessage({ version: 1, type: "previewFile", messageId: target.getAttribute("data-message") || "", id: target.getAttribute("data-id") || "", key: target.getAttribute("data-key") || "", iv: target.getAttribute("data-iv") || "", mime: target.getAttribute("data-mime") || "" });
+    if (act === "reload-image") {
+      vscode.postMessage({ version: 1, type: "reloadImage", messageId: id, attachmentId: target.getAttribute("data-file") || "" });
+      return;
+    }
+    if (act === "save-attachment") {
+      vscode.postMessage({ version: 1, type: "saveAttachment", messageId: id, attachmentId: target.getAttribute("data-file") || "" });
       return;
     }
     if (act === "open-preview") {
+      const image = target.querySelector("img");
+      const src = image instanceof HTMLImageElement ? image.getAttribute("src") || "" : "";
       const box = document.getElementById("lightbox");
-      if (box) {
+      if (box && src) {
         box.hidden = false;
-        box.innerHTML = '<img src="' + esc(target.getAttribute("data-src") || "") + '" alt="">';
+        box.innerHTML = '<img src="' + esc(src) + '" alt=""><button class="btn" type="button" data-act="save-attachment" data-id="' + esc(target.getAttribute("data-message") || "") + '" data-file="' + esc(id) + '">Save</button>';
       }
       return;
     }
@@ -1162,17 +1175,24 @@ export function renderWebview(webview: Webview, state: HostState): string {
   document.getElementById("password-form").addEventListener("submit", (e) => { e.preventDefault(); const d = new FormData(e.target); vscode.postMessage({ version: 1, type: "changePassword", currentPassword: String(d.get("currentPassword")||""), newPassword: String(d.get("newPassword")||"") }); e.target.reset(); });
   const riskyExt = new Set(["exe", "bat", "cmd", "com", "msi", "dll", "scr", "ps1", "vbs", "js", "jar", "apk", "sh", "hta"]);
   function addPending(fileList) {
-    const next = [...pendingFiles];
     for (const file of fileList) {
-      if (next.length >= 10) break;
+      if (pendingFiles.length >= 10) break;
       if (!file || file.size < 1 || file.size > 10485760) {
         state = { ...state, error: "Each file must be between 1 byte and 10 MB." };
         apply(state);
         return;
       }
-      next.push(file);
+      const item = { file, preview: "" };
+      pendingFiles.push(item);
+      if (file.type && file.type.startsWith("image/")) {
+        const reader = new FileReader();
+        reader.onload = () => {
+          item.preview = typeof reader.result === "string" ? reader.result : "";
+          apply(state);
+        };
+        reader.readAsDataURL(file);
+      }
     }
-    pendingFiles = next;
     apply(state);
   }
   document.getElementById("attach-btn").addEventListener("click", () => document.getElementById("file-input").click());
@@ -1187,25 +1207,29 @@ export function renderWebview(webview: Webview, state: HostState): string {
     event.preventDefault();
     if (event.dataTransfer && event.dataTransfer.files) addPending(event.dataTransfer.files);
   });
-  document.getElementById("lightbox").addEventListener("click", () => { document.getElementById("lightbox").hidden = true; });
+  document.getElementById("lightbox").addEventListener("click", (event) => {
+    const target = event.target;
+    if (target instanceof HTMLElement && target.closest("[data-act='save-attachment']")) return;
+    document.getElementById("lightbox").hidden = true;
+  });
   document.getElementById("message-form").addEventListener("submit", (e) => {
     e.preventDefault();
     if (!state.activeConversationId || state.busy) return;
     const box = e.target.querySelector("textarea");
     const text = box instanceof HTMLTextAreaElement ? box.value.trim() : "";
     if (pendingFiles.length) {
-      const risky = pendingFiles.some((file) => riskyExt.has((file.name.split(".").pop() || "").toLowerCase()));
+      const risky = pendingFiles.some((item) => riskyExt.has((item.file.name.split(".").pop() || "").toLowerCase()));
       const sendSelected = (confirmedRisky) => {
         const files = pendingFiles.slice();
         pendingFiles = [];
         apply(state);
-        Promise.all(files.map((file) => new Promise((resolve) => {
+        Promise.all(files.map((item) => new Promise((resolve) => {
           const reader = new FileReader();
           reader.onload = () => {
             const result = typeof reader.result === "string" ? reader.result : "";
-            resolve({ name: file.name, mime: file.type || "application/octet-stream", base64: (result.split(",")[1] || "") });
+            resolve({ name: item.file.name, mime: item.file.type || "application/octet-stream", base64: (result.split(",")[1] || "") });
           };
-          reader.readAsDataURL(file);
+          reader.readAsDataURL(item.file);
         }))).then((encoded) => {
           vscode.postMessage({ version: 1, type: "sendFiles", conversationId: state.activeConversationId, text, confirmedRisky, files: encoded });
         });

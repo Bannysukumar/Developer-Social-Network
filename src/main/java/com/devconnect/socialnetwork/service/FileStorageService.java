@@ -56,9 +56,9 @@ public class FileStorageService {
         return repository.save(entity);
     }
 
-    public String storeOpaque(InputStream input, long declaredSize) {
+    public StoredObject storeOpaque(InputStream input, long declaredSize) {
         long max = properties.getStorage().getMaxAttachmentBytes();
-        if (declaredSize <= 0 || declaredSize > max) {
+        if (declaredSize > max) {
             throw new ValidationFailedException("File size is not allowed");
         }
         String id = Ids.newId();
@@ -71,10 +71,11 @@ public class FileStorageService {
         try {
             Files.createDirectories(directory);
             long written = writeLimited(target, input, max);
-            if (written != declaredSize) {
+            if (written <= 0) {
                 Files.deleteIfExists(target);
                 throw new ValidationFailedException("File size is not allowed");
             }
+            return new StoredObject("attachments/" + id, written);
         } catch (ValidationFailedException ex) {
             throw ex;
         } catch (IOException ex) {
@@ -85,7 +86,9 @@ public class FileStorageService {
             }
             throw new IllegalStateException("File could not be stored", ex);
         }
-        return "attachments/" + id;
+    }
+
+    public record StoredObject(String storageKey, long size) {
     }
 
     public StoredFileEntity require(String fileId) {

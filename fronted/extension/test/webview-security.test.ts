@@ -38,6 +38,10 @@ describe("Webview security shell", () => {
     expect(html).toContain("justify-content: flex-start");
     expect(html).not.toMatch(/#message-list\s*\{[^}]*justify-content:\s*(center|flex-end)/);
     expect(html).toContain("Start the conversation by saying hello.");
+    expect(html).toContain("image-bubble");
+    expect(html).toContain("file-card");
+    expect(html).toContain("img-src vscode-webview://local data:");
+    expect(html).not.toContain("View image");
     expect(html).not.toContain("No messages yet. Say hello.");
   });
 });

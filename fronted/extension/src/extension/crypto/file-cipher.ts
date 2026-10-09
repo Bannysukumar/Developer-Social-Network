@@ -24,12 +24,16 @@ export function sealFile(plaintext: Buffer): SealedFile {
 }
 
 export function openFile(ciphertext: Buffer, key: string, iv: string): Buffer {
-  if (ciphertext.length <= TAG_BYTES) {
+  try {
+    if (ciphertext.length <= TAG_BYTES) {
+      throw new Error("short");
+    }
+    const body = ciphertext.subarray(0, ciphertext.length - TAG_BYTES);
+    const tag = ciphertext.subarray(ciphertext.length - TAG_BYTES);
+    const decipher = createDecipheriv("aes-256-gcm", Buffer.from(key, "base64"), Buffer.from(iv, "base64"));
+    decipher.setAuthTag(tag);
+    return Buffer.concat([decipher.update(body), decipher.final()]);
+  } catch {
     throw new Error("This file could not be opened.");
   }
-  const body = ciphertext.subarray(0, ciphertext.length - TAG_BYTES);
-  const tag = ciphertext.subarray(ciphertext.length - TAG_BYTES);
-  const decipher = createDecipheriv("aes-256-gcm", Buffer.from(key, "base64"), Buffer.from(iv, "base64"));
-  decipher.setAuthTag(tag);
-  return Buffer.concat([decipher.update(body), decipher.final()]);
 }

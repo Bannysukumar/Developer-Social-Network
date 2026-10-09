@@ -162,6 +162,18 @@ export const webviewMessageSchema = z.discriminatedUnion("type", [
   }).strict(),
   z.object({
     version: z.literal(1),
+    type: z.literal("reloadImage"),
+    messageId: z.string().min(1),
+    attachmentId: z.string().min(1),
+  }).strict(),
+  z.object({
+    version: z.literal(1),
+    type: z.literal("saveAttachment"),
+    messageId: z.string().min(1),
+    attachmentId: z.string().min(1),
+  }).strict(),
+  z.object({
+    version: z.literal(1),
     type: z.literal("previewFile"),
     messageId: z.string().min(1),
     id: z.string().min(1),
@@ -208,6 +220,7 @@ const displayMessageSchema = messageSchema.extend({
     key: z.string(),
     iv: z.string(),
     preview: z.string().optional(),
+    loadError: z.boolean().optional(),
   })).optional(),
 });
 

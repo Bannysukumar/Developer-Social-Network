@@ -70,7 +70,7 @@ export class ConversationsApi {
     return this.client.request(`conversations/${pathId(conversationId)}/attachments`, attachmentCreatedSchema, {
       method: "POST",
       timeoutMs: 60_000,
-      multipart: { filename: "blob", contentType: "application/octet-stream", bytes },
+      rawBody: bytes,
     });
   }
 

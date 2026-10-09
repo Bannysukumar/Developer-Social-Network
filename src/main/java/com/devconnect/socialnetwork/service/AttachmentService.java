@@ -12,9 +12,7 @@ import com.devconnect.socialnetwork.repository.AttachmentRepository;
 import com.devconnect.socialnetwork.repository.MessageRepository;
 import com.devconnect.socialnetwork.util.Ids;
 import org.springframework.stereotype.Service;
-import org.springframework.web.multipart.MultipartFile;
 
-import java.io.IOException;
 import java.io.InputStream;
 import java.time.Clock;
 import java.time.Duration;
@@ -55,23 +53,18 @@ public class AttachmentService {
         this.clock = clock;
     }
 
-    public AttachmentCreatedResponse upload(String userId, String conversationId, MultipartFile file) {
-        if (file == null || file.isEmpty()) {
+    public AttachmentCreatedResponse upload(String userId, String conversationId, InputStream input, long declaredSize) {
+        if (input == null) {
             throw new ValidationFailedException("File size is not allowed");
         }
         assertCanSend(userId, conversationId);
-        String storageKey;
-        try {
-            storageKey = fileStorageService.storeOpaque(file.getInputStream(), file.getSize());
-        } catch (IOException ex) {
-            throw new ValidationFailedException("File could not be stored");
-        }
+        FileStorageService.StoredObject stored = fileStorageService.storeOpaque(input, declaredSize);
         AttachmentEntity entity = new AttachmentEntity();
         entity.setId(Ids.newId());
         entity.setOwnerId(userId);
         entity.setConversationId(conversationId);
-        entity.setSize(file.getSize());
-        entity.setStorageKey(storageKey);
+        entity.setSize(stored.size());
+        entity.setStorageKey(stored.storageKey());
         entity.setCreatedAt(clock.instant());
         repository.save(entity);
         return new AttachmentCreatedResponse(entity.getId(), entity.getSize());
