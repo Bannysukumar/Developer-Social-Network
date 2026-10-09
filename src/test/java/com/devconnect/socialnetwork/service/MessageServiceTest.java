@@ -2,6 +2,8 @@ package com.devconnect.socialnetwork.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.devconnect.socialnetwork.domain.DeletionScope;
+import com.devconnect.socialnetwork.dto.request.SendMessageRequest;
+import com.devconnect.socialnetwork.entity.ConversationEntity;
 import com.devconnect.socialnetwork.domain.MessageStatus;
 import com.devconnect.socialnetwork.domain.MessageType;
 import com.devconnect.socialnetwork.entity.MessageEntity;
@@ -24,6 +26,7 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -109,6 +112,20 @@ class MessageServiceTest {
         assertThatThrownBy(() -> service.markRead("ada", MESSAGE_ID))
                 .isInstanceOf(ForbiddenException.class);
         verify(messageRepository, never()).save(any());
+    }
+
+    @Test
+    void sendRejectsAnExistingConversationWhileABlockIsActive() {
+        ConversationEntity conversation = new ConversationEntity();
+        conversation.setParticipantIds(java.util.List.of("ada", "bob"));
+        when(conversationService.requireMember("ada", "c1")).thenReturn(conversation);
+        doThrow(new ForbiddenException("You can't interact with this account."))
+                .when(blockService).assertCanInteract("ada", "bob");
+
+        assertThatThrownBy(() -> service.send("ada", "c1", new SendMessageRequest("ciphertext", null, null, null, null)))
+                .isInstanceOf(ForbiddenException.class);
+        verify(messageRepository, never()).save(any());
+        verify(notificationService, never()).notifyNewMessage(any(), any(), any());
     }
 
     private MessageEntity stored(String ciphertext) {

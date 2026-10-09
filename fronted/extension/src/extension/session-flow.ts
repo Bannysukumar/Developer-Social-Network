@@ -426,7 +426,6 @@ export class SessionFlow {
       return;
     }
     if (message.type === "closeThread") {
-      this.dropHiddenConversation();
       this.activeConversationId = null;
       this.messages = [];
       this.messageLock = "none";
@@ -437,7 +436,6 @@ export class SessionFlow {
     if (message.type === "navigate") {
       this.error = null;
       if (message.destination === "messages" && this.screen === "messages") {
-        this.dropHiddenConversation();
         this.activeConversationId = null;
         this.messageLock = "none";
       }
@@ -685,11 +683,9 @@ export class SessionFlow {
           this.blockedUsers = await this.auth.blockedUsers();
           if (this.peerId() === message.userId) {
             this.messageLock = "blocked-by-me";
-            this.activeConversationId = null;
-            this.messages = [];
           }
           this.friends = this.friends.filter((user) => user.id !== message.userId);
-          this.conversations = (await this.auth.listConversations()).filter((conversation) => !conversation.participantIds.includes(message.userId));
+          this.conversations = await this.auth.listConversations();
           await this.refreshSocialAndUser(message.userId);
           break;
         case "unblockUser":
@@ -915,10 +911,6 @@ export class SessionFlow {
       if (this.typing?.userId === userId) this.typing = null;
       this.searchResults = this.searchResults.filter((user) => user.id !== userId);
       this.friends = this.friends.filter((user) => user.id !== userId);
-      this.conversations = this.conversations.filter((conversation) => {
-        if (!conversation.participantIds.includes(userId)) return true;
-        return conversation.id === this.activeConversationId;
-      });
     } else {
       this.hiddenPresence.delete(userId);
       if (presence && (presence.status === "ONLINE" || presence.status === "OFFLINE")) {
@@ -955,12 +947,6 @@ export class SessionFlow {
 
   hidesUser(userId: string): boolean {
     return this.hiddenPresence.has(userId) || this.blockedUsers.some((user) => user.id === userId);
-  }
-
-  private dropHiddenConversation(): void {
-    if (this.messageLock === "none" || !this.activeConversationId) return;
-    const id = this.activeConversationId;
-    this.conversations = this.conversations.filter((conversation) => conversation.id !== id);
   }
 
   private scheduleConversationRead(conversationId: string): void {

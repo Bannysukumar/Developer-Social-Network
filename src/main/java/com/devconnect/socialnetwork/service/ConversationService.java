@@ -24,7 +24,6 @@ import org.springframework.stereotype.Service;
 
 import java.time.Clock;
 import java.util.List;
-import java.util.Set;
 
 @Service
 public class ConversationService {
@@ -90,12 +89,8 @@ public class ConversationService {
     }
 
     public PageResponse<ConversationResponse> list(String userId, int page, int size) {
-        Set<String> hidden = blockService.hiddenUserIds(userId);
         Pageable pageable = Paging.page(page, size, 50, Sort.by(Sort.Direction.DESC, "updatedAt"));
         Criteria criteria = Criteria.where("participantIds").is(userId);
-        if (!hidden.isEmpty()) {
-            criteria = new Criteria().andOperator(criteria, Criteria.where("participantIds").nin(hidden));
-        }
         Query query = Query.query(criteria);
         long total = mongoTemplate.count(query, ConversationEntity.class);
         query.with(pageable);

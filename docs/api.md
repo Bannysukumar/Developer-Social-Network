@@ -107,7 +107,7 @@ A private account returns `limited: true` and omits bio from non-friends. A bloc
 - `DELETE /api/v1/users/{userId}/block`
 - `GET /api/v1/users/{userId}/block-status`
 
-Only friends can open a conversation. Users cannot friend or message across a block.
+Only friends can open a conversation. Users cannot friend or message across a block. An existing conversation stays in both participants' message lists while a block is active; new sends are still rejected.
 
 ## Conversations and messages
 
