@@ -180,6 +180,8 @@ Identity registration:
 | `READ` | both | client sends `messageId`; server sends the ack | same socket | only the recipient can mark that message read | `{ "type": "READ", "messageId": "..." }` |
 | `NOTIFICATION` | server | same object as `GET /notifications` | same socket | the notification recipient | `{ "type": "NOTIFICATION", "data": { "type": "FRIEND_REQUEST" } }` |
 | `PRESENCE_UPDATE` | server | `userId`, `status` (`ONLINE` or `OFFLINE`), optional `lastSeenAt` | same socket | friends, when activity status is on and neither user blocked the other. Offline last seen is not sent to non-friends | `{ "type": "PRESENCE_UPDATE", "data": { "userId": "...", "status": "ONLINE" } }` |
+| `BLOCK_STATE` | server | `userId`, `blockedByMe`, `blockedMe`, optional `presence` | same socket | the two people in the block, after the write commits. No presence field while the block hides it | `{ "type": "BLOCK_STATE", "data": { "userId": "...", "blockedByMe": false, "blockedMe": true } }` |
+| `PRESENCE_CLEAR` | server | `userId` | same socket | drop cached presence for that user | `{ "type": "PRESENCE_CLEAR", "data": { "userId": "..." } }` |
 | `TYPING_START` | both | `conversationId`, and the server adds `userId` | same socket | conversation member, friends, not blocked. Not stored | `{ "type": "TYPING_START", "conversationId": "..." }` |
 | `TYPING_STOP` | both | same as start | same socket | same as start | `{ "type": "TYPING_STOP", "conversationId": "..." }` |
 | `ERROR` | server | `errorCode`, `message` | same socket | the sender of the rejected frame | `{ "type": "ERROR", "data": { "errorCode": "FORBIDDEN" } }` |

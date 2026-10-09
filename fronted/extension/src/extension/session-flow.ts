@@ -48,6 +48,8 @@ export class SessionFlow {
   private typingTimer: ReturnType<typeof setTimeout> | undefined;
   private readInflight = new Set<string>();
   private readAgain = new Set<string>();
+  private hiddenPresence = new Set<string>();
+  private blockEpoch = new Map<string, number>();
   constructor(
     private readonly auth: AuthService,
     private readonly onChange: () => void,
@@ -135,8 +137,17 @@ export class SessionFlow {
   }
 
   ingestFrame(frame: ServerFrame): void {
+    if (frame.type === "PRESENCE_CLEAR" || frame.type === "BLOCK_STATE") {
+      void this.applyBlockFrame(frame);
+      return;
+    }
     const presence = presenceFromFrame(frame);
     if (presence) {
+      if (this.hiddenPresence.has(presence.userId)) {
+        delete this.presenceByUser[presence.userId];
+        this.pushState();
+        return;
+      }
       const next = mergePresence(this.presenceByUser[presence.userId], presence, "socket");
       if (next) this.presenceByUser[presence.userId] = next;
       else delete this.presenceByUser[presence.userId];
@@ -152,7 +163,7 @@ export class SessionFlow {
     if (typing) {
       if (this.typingTimer) clearTimeout(this.typingTimer);
       this.typingTimer = undefined;
-      if (typing.active && typing.userId !== this.auth.getUser()?.id) {
+      if (typing.active && typing.userId !== this.auth.getUser()?.id && !this.hiddenPresence.has(typing.userId)) {
         this.typing = { conversationId: typing.conversationId, userId: typing.userId };
         this.typingTimer = setTimeout(() => {
           this.typing = null;
@@ -305,6 +316,8 @@ export class SessionFlow {
     this.blockedUsers = [];
     this.avatars = {};
     this.avatarMisses.clear();
+    this.hiddenPresence.clear();
+    this.blockEpoch.clear();
     this.messageLock = "none";
   }
 
@@ -864,9 +877,59 @@ export class SessionFlow {
     }
   }
 
+  private async applyBlockFrame(frame: ServerFrame): Promise<void> {
+    const data = frame.data;
+    if (!data || typeof data !== "object" || !("userId" in data)) return;
+    const userId = (data as { userId?: unknown }).userId;
+    if (typeof userId !== "string") return;
+    if (frame.type === "PRESENCE_CLEAR") {
+      this.hiddenPresence.add(userId);
+      delete this.presenceByUser[userId];
+      if (this.typing?.userId === userId) this.typing = null;
+      this.pushState();
+      return;
+    }
+    const epoch = (this.blockEpoch.get(userId) ?? 0) + 1;
+    this.blockEpoch.set(userId, epoch);
+    let status: { blockedByMe: boolean; blockedMe: boolean };
+    try {
+      status = await this.auth.blockStatus(userId);
+    } catch {
+      return;
+    }
+    if (this.blockEpoch.get(userId) !== epoch) return;
+    const locked = status.blockedByMe || status.blockedMe;
+    const presence = "presence" in data ? (data as { presence?: { status?: unknown; lastSeenAt?: unknown } | null }).presence : undefined;
+    if (locked) {
+      this.hiddenPresence.add(userId);
+      delete this.presenceByUser[userId];
+      if (this.typing?.userId === userId) this.typing = null;
+      this.searchResults = this.searchResults.filter((user) => user.id !== userId);
+      this.friends = this.friends.filter((user) => user.id !== userId);
+      this.conversations = this.conversations.filter((conversation) => conversation.id === this.activeConversationId || !conversation.participantIds.includes(userId));
+    } else {
+      this.hiddenPresence.delete(userId);
+      if (presence && (presence.status === "ONLINE" || presence.status === "OFFLINE")) {
+        this.presenceByUser[userId] = {
+          status: presence.status,
+          lastSeenAt: typeof presence.lastSeenAt === "string" ? presence.lastSeenAt : null,
+        };
+      }
+      this.conversations = await this.auth.listConversations();
+    }
+    if (this.blockEpoch.get(userId) !== epoch) return;
+    if (status.blockedByMe) this.blockedUsers = await this.auth.blockedUsers();
+    else this.blockedUsers = this.blockedUsers.filter((user) => user.id !== userId);
+    if (this.peerId() === userId) {
+      this.messageLock = status.blockedByMe ? "blocked-by-me" : status.blockedMe ? "blocked-me" : "none";
+      if (this.messageLock === "none") this.error = null;
+    }
+    this.pushState();
+  }
+
   private absorbPresence(people: readonly { id: string; presence?: { status: "ONLINE" | "OFFLINE"; lastSeenAt?: string | null } | null }[]): void {
     for (const person of people) {
-      if (!person?.id) continue;
+      if (!person?.id || this.hiddenPresence.has(person.id)) continue;
       const next = mergePresence(this.presenceByUser[person.id], person.presence ?? null, "snapshot");
       if (next) this.presenceByUser[person.id] = next;
       else delete this.presenceByUser[person.id];
@@ -976,6 +1039,7 @@ export class SessionFlow {
 
   private async reconcileQuiet(): Promise<void> {
     await Promise.all([this.refreshSocialQuiet(), this.refreshConversationsQuiet(), this.refreshNotesQuiet()]);
+    if (this.activeConversationId) await this.syncMessageLock();
   }
 
   private async refreshNotesQuiet(): Promise<void> {

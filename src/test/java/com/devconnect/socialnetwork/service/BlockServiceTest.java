@@ -6,6 +6,7 @@ import com.devconnect.socialnetwork.entity.UserEntity;
 import com.devconnect.socialnetwork.repository.BlockRepository;
 import com.devconnect.socialnetwork.repository.ConversationRepository;
 import com.devconnect.socialnetwork.repository.UserRepository;
+import com.devconnect.socialnetwork.websocket.RealtimePublisher;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -41,6 +42,10 @@ class BlockServiceTest {
     private AuditService auditService;
     @Mock
     private MongoTemplate mongoTemplate;
+    @Mock
+    private RealtimePublisher realtimePublisher;
+    @Mock
+    private PresenceService presenceService;
 
     private BlockService service;
 
@@ -53,12 +58,15 @@ class BlockServiceTest {
                 friendshipService,
                 auditService,
                 mongoTemplate,
+                realtimePublisher,
+                presenceService,
                 Clock.fixed(Instant.parse("2026-10-09T12:00:00Z"), ZoneOffset.UTC)
         );
     }
 
     @Test
     void blockingDoesNotDeleteTheFriendship() {
+        when(userRepository.findById(ADA)).thenReturn(Optional.of(active(ADA)));
         when(userRepository.findById(BOB)).thenReturn(Optional.of(active(BOB)));
         when(blockRepository.existsByBlockerIdAndBlockedId(ADA, BOB)).thenReturn(false);
 
@@ -66,10 +74,13 @@ class BlockServiceTest {
 
         verify(friendshipService, never()).removePair(any(), any());
         verify(blockRepository).save(any());
+        verify(realtimePublisher).publish(org.mockito.ArgumentMatchers.eq(BOB), org.mockito.ArgumentMatchers.eq("BLOCK_STATE"), any());
+        verify(presenceService).visibleSnapshot(BOB, ADA);
     }
 
     @Test
     void unblockingRestoresFriendshipWhenAConversationAlreadyExists() {
+        when(userRepository.findById(ADA)).thenReturn(Optional.of(active(ADA)));
         when(userRepository.findById(BOB)).thenReturn(Optional.of(active(BOB)));
         when(blockRepository.findByBlockerIdAndBlockedId(ADA, BOB)).thenReturn(Optional.of(new com.devconnect.socialnetwork.entity.BlockEntity()));
         when(conversationRepository.findByParticipantKey(ADA + ":" + BOB)).thenReturn(Optional.of(new ConversationEntity()));

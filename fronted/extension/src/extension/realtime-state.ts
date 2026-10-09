@@ -55,7 +55,7 @@ export function mergeLiveMessage(
   const fromOther = incoming.senderId !== selfId;
   return {
     bumpConversation: fromOther ? incoming.conversationId : undefined,
-    toast: fromOther ? "New message" : null,
+    toast: null,
     toastSeq: fromOther ? toastSeq + 1 : toastSeq,
     refresh: "conversations",
   };

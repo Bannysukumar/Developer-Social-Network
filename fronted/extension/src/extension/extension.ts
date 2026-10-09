@@ -5,7 +5,7 @@ import { createApiConfig } from "../api/config";
 import type { ScreenId } from "../shared/flow";
 import { AuthService } from "./auth-service";
 import { chatSocketUrl, messageFromFrame, NodeChatSocket, notificationFromFrame } from "./chat-socket";
-import { decideMessageNotice, decideNotificationNotice, decideStoredNotice, isActivelyReading, noticeLaunchUri, unreadMessageNotificationId, type NoticePrefs, type NoticeTarget } from "./desktop-notice";
+import { decideMessageNotice, decideNotificationNotice, decideStoredNotice, isActivelyReading, noticeChannel, noticeLaunchUri, unreadMessageNotificationId, type NoticePrefs, type NoticeTarget } from "./desktop-notice";
 import { showBackgroundNotice } from "./os-notice";
 import { SessionFlow } from "./session-flow";
 import { createStateMessage, renderWebview } from "./webview";
@@ -216,10 +216,11 @@ class DevConnectHost implements vscode.WebviewViewProvider, vscode.Disposable {
     }
     const foreground = this.windowIsForeground();
     this.output.appendLine(`notice show id=${target.id} action=${target.action} foreground=${foreground} viewVisible=${this.view?.visible === true}`);
-    if (!foreground) {
+    if (noticeChannel(foreground) === "desktop") {
       const launch = noticeLaunchUri("Bannysukumar2255", "devconnect-vscode-extension", target);
       const toast = await showBackgroundNotice(this.toastScript, target.body, launch);
       this.output.appendLine(`windows toast ok=${toast.ok} detail=${toast.detail}`);
+      return;
     }
     const choice = await vscode.window.showInformationMessage(target.body, target.action);
     if (choice !== target.action || this.openingNotice) return;

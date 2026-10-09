@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { decideMessageNotice, decideNotificationNotice, decideStoredNotice, isActivelyReading, noticeLaunchUri, unreadMessageNotificationId } from "../src/extension/desktop-notice";
+import { decideMessageNotice, decideNotificationNotice, decideStoredNotice, isActivelyReading, noticeChannel, noticeLaunchUri, unreadMessageNotificationId } from "../src/extension/desktop-notice";
 
 const prefs = { messages: true, friendRequests: true, friendAccepted: true };
 
@@ -80,6 +80,8 @@ describe("desktop notices", () => {
     expect(isActivelyReading(false, true, "c1", "c1")).toBe(false);
     expect(isActivelyReading(true, false, "c1", "c1")).toBe(false);
     expect(isActivelyReading(true, true, "c1", "c2")).toBe(false);
+    expect(noticeChannel(true)).toBe("editor");
+    expect(noticeChannel(false)).toBe("desktop");
     const prefs = { messages: true, friendRequests: true, friendAccepted: true };
     const stored = decideStoredNotice({
       id: "n9",

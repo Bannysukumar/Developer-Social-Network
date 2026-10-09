@@ -51,7 +51,7 @@ describe("realtime state", () => {
   test("counts a message that arrived in another conversation", () => {
     const patch = mergeLiveMessage([], message, null, "ada", 0);
     expect(patch.bumpConversation).toBe("c1");
-    expect(patch.toast).toBe("New message");
+    expect(patch.toast).toBeNull();
     expect(patch.refresh).toBe("conversations");
   });
 

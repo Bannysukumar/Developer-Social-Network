@@ -10,6 +10,7 @@ import com.devconnect.socialnetwork.exception.InvalidStateException;
 import com.devconnect.socialnetwork.exception.ResourceNotFoundException;
 import com.devconnect.socialnetwork.repository.BlockRepository;
 import com.devconnect.socialnetwork.repository.ConversationRepository;
+import com.devconnect.socialnetwork.websocket.RealtimePublisher;
 import com.devconnect.socialnetwork.repository.UserRepository;
 import com.devconnect.socialnetwork.util.Ids;
 import org.springframework.data.mongodb.core.MongoTemplate;
@@ -21,6 +22,7 @@ import org.springframework.stereotype.Service;
 import java.time.Clock;
 import java.util.Collection;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -34,6 +36,8 @@ public class BlockService {
     private final FriendshipService friendshipService;
     private final AuditService auditService;
     private final MongoTemplate mongoTemplate;
+    private final RealtimePublisher realtimePublisher;
+    private final PresenceService presenceService;
     private final Clock clock;
 
     public BlockService(
@@ -43,6 +47,8 @@ public class BlockService {
             FriendshipService friendshipService,
             AuditService auditService,
             MongoTemplate mongoTemplate,
+            RealtimePublisher realtimePublisher,
+            PresenceService presenceService,
             Clock clock
     ) {
         this.blockRepository = blockRepository;
@@ -51,6 +57,8 @@ public class BlockService {
         this.friendshipService = friendshipService;
         this.auditService = auditService;
         this.mongoTemplate = mongoTemplate;
+        this.realtimePublisher = realtimePublisher;
+        this.presenceService = presenceService;
         this.clock = clock;
     }
 
@@ -113,6 +121,7 @@ public class BlockService {
             cancelPending(userId, targetUserId);
             auditService.record(AuditEventType.USER_BLOCKED, userId, Map.of("targetUserId", targetUserId));
         }
+        publishBlockState(userId, targetUserId);
         return status(userId, targetUserId);
     }
 
@@ -127,11 +136,30 @@ public class BlockService {
             friendshipService.createFriendship(userId, targetUserId);
         }
         auditService.record(AuditEventType.USER_UNBLOCKED, userId, Map.of("targetUserId", targetUserId));
+        publishBlockState(userId, targetUserId);
         return status(userId, targetUserId);
     }
 
     public void deleteAllForUser(String userId) {
         blockRepository.deleteByBlockerIdOrBlockedId(userId, userId);
+    }
+
+    private void publishBlockState(String actorId, String otherId) {
+        realtimePublisher.publish(actorId, "BLOCK_STATE", blockFrame(actorId, otherId));
+        realtimePublisher.publish(otherId, "BLOCK_STATE", blockFrame(otherId, actorId));
+    }
+
+    private Map<String, Object> blockFrame(String viewerId, String otherId) {
+        BlockStatusResponse view = status(viewerId, otherId);
+        Map<String, Object> frame = new LinkedHashMap<>();
+        frame.put("userId", otherId);
+        frame.put("blockedByMe", view.blockedByMe());
+        frame.put("blockedMe", view.blockedMe());
+        Map<String, Object> presence = presenceService.visibleSnapshot(viewerId, otherId);
+        if (presence != null) {
+            frame.put("presence", presence);
+        }
+        return frame;
     }
 
     private void cancelPending(String firstUserId, String secondUserId) {

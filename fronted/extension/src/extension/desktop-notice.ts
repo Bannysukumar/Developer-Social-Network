@@ -38,6 +38,11 @@ export function unreadMessageNotificationId(
   return notifications.find((note) => note.type === "NEW_MESSAGE" && !note.read && note.referenceId === conversationId)?.id;
 }
 
+/** Focused windows use the in-editor notice. Background windows use one Windows toast. */
+export function noticeChannel(windowFocused: boolean): "desktop" | "editor" {
+  return windowFocused ? "editor" : "desktop";
+}
+
 /** True only while this window is focused and that conversation is on screen. */
 export function isActivelyReading(
   windowFocused: boolean,

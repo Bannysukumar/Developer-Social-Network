@@ -7,6 +7,7 @@ import com.devconnect.socialnetwork.entity.RelationshipEntity;
 import com.devconnect.socialnetwork.entity.UserEntity;
 import com.devconnect.socialnetwork.repository.BlockRepository;
 import com.devconnect.socialnetwork.repository.RelationshipRepository;
+import com.devconnect.socialnetwork.util.Ids;
 import com.devconnect.socialnetwork.repository.UserRepository;
 import com.devconnect.socialnetwork.websocket.RealtimePublisher;
 import com.devconnect.socialnetwork.websocket.WebSocketSessionRegistry;
@@ -141,6 +142,25 @@ public class PresenceService {
 
     private Object lock(String userId) {
         return presenceLocks.computeIfAbsent(userId, ignored -> new Object());
+    }
+
+    public Map<String, Object> visibleSnapshot(String viewerId, String subjectId) {
+        if (eitherBlocked(viewerId, subjectId) || !areFriends(viewerId, subjectId)) {
+            return null;
+        }
+        UserEntity subject = userRepository.findById(subjectId).orElse(null);
+        if (subject == null || !PresencePolicy.activityVisible(subject.getShowActivityStatus())) {
+            return null;
+        }
+        if (registry.isOnline(subjectId)) {
+            return payload(subjectId, "ONLINE", null);
+        }
+        return payload(subjectId, "OFFLINE", subject.getLastSeenAt());
+    }
+
+    private boolean areFriends(String firstUserId, String secondUserId) {
+        String[] pair = Ids.orderedPair(firstUserId, secondUserId);
+        return relationshipRepository.existsByUserAIdAndUserBId(pair[0], pair[1]);
     }
 
     private void announce(String userId, String status, Instant lastSeenAt) {
