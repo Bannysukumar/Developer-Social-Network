@@ -1,10 +1,8 @@
 package com.devconnect.socialnetwork.service;
 
 import com.devconnect.socialnetwork.domain.AccountStatus;
-import com.devconnect.socialnetwork.entity.ConversationEntity;
 import com.devconnect.socialnetwork.entity.UserEntity;
 import com.devconnect.socialnetwork.repository.BlockRepository;
-import com.devconnect.socialnetwork.repository.ConversationRepository;
 import com.devconnect.socialnetwork.repository.UserRepository;
 import com.devconnect.socialnetwork.websocket.RealtimePublisher;
 import org.junit.jupiter.api.BeforeEach;
@@ -33,8 +31,6 @@ class BlockServiceTest {
     @Mock
     private BlockRepository blockRepository;
     @Mock
-    private ConversationRepository conversationRepository;
-    @Mock
     private UserRepository userRepository;
     @Mock
     private FriendshipService friendshipService;
@@ -53,7 +49,6 @@ class BlockServiceTest {
     void setUp() {
         service = new BlockService(
                 blockRepository,
-                conversationRepository,
                 userRepository,
                 friendshipService,
                 auditService,
@@ -79,16 +74,15 @@ class BlockServiceTest {
     }
 
     @Test
-    void unblockingRestoresFriendshipWhenAConversationAlreadyExists() {
+    void unblockingRemovesTheBlockWithoutRecreatingAFriendship() {
         when(userRepository.findById(ADA)).thenReturn(Optional.of(active(ADA)));
         when(userRepository.findById(BOB)).thenReturn(Optional.of(active(BOB)));
         when(blockRepository.findByBlockerIdAndBlockedId(ADA, BOB)).thenReturn(Optional.of(new com.devconnect.socialnetwork.entity.BlockEntity()));
-        when(conversationRepository.findByParticipantKey(ADA + ":" + BOB)).thenReturn(Optional.of(new ConversationEntity()));
 
         service.unblock(ADA, BOB);
 
         verify(blockRepository).deleteByBlockerIdAndBlockedId(ADA, BOB);
-        verify(friendshipService).createFriendship(ADA, BOB);
+        verify(friendshipService, never()).createFriendship(any(), any());
     }
 
     private UserEntity active(String id) {

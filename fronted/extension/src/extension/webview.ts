@@ -509,7 +509,7 @@ export function renderWebview(webview: Webview, state: HostState): string {
         <button class="btn quiet" type="button" data-settings="menu">Settings</button>
         <h1>About</h1>
         <p>DevConnect</p>
-        <p class="muted" id="about-version">Version 0.4.23</p>
+        <p class="muted" id="about-version">Version 0.4.24</p>
         <p class="muted">A developer network inside Visual Studio Code. Messages stay encrypted on your devices.</p>
       </div>
     </section>
@@ -617,6 +617,8 @@ export function renderWebview(webview: Webview, state: HostState): string {
     return '<button class="btn primary" data-act="friend" data-id="' + id + '">Connect</button>';
   }
   function presenceFor(userId, person) {
+    if (person && person.relationship === "BLOCKED") return null;
+    if (userId && (state.blockedUsers || []).some((user) => user.id === userId)) return null;
     const live = state.presenceByUser && userId ? state.presenceByUser[userId] : null;
     return live || (person && person.presence) || null;
   }
@@ -754,6 +756,9 @@ export function renderWebview(webview: Webview, state: HostState): string {
     const chatFilter = document.getElementById("chat-filter");
     const needle = chatQuery.trim().toLowerCase();
     const visibleChats = (state.conversations || []).filter((conversation) => {
+      const peerId = state.user ? (conversation.participantIds || []).find((id) => id !== state.user.id) : "";
+      if (peerId && (state.blockedUsers || []).some((user) => user.id === peerId)) return false;
+      if (state.messageLock && state.messageLock !== "none" && conversation.id === state.activeConversationId) return false;
       if (!needle) return true;
       const person = chatPerson(conversation);
       const preview = (state.conversationPreviews || {})[conversation.id] || "";

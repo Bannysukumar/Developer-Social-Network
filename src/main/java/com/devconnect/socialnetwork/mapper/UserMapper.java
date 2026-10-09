@@ -59,7 +59,9 @@ public class UserMapper {
     }
 
     public UserSummaryResponse toSummary(UserEntity user, RelationshipView relationship, String viewerId) {
-        PresenceView presence = presenceService.visible(viewerId, user, relationship);
+        PresenceView presence = relationship == RelationshipView.BLOCKED
+                ? null
+                : presenceService.visible(viewerId, user, relationship);
         return new UserSummaryResponse(
                 user.getId(),
                 user.getUsername(),

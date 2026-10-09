@@ -426,6 +426,7 @@ export class SessionFlow {
       return;
     }
     if (message.type === "closeThread") {
+      this.dropHiddenConversation();
       this.activeConversationId = null;
       this.messages = [];
       this.messageLock = "none";
@@ -435,7 +436,11 @@ export class SessionFlow {
     }
     if (message.type === "navigate") {
       this.error = null;
-      if (message.destination === "messages" && this.screen === "messages") this.activeConversationId = null;
+      if (message.destination === "messages" && this.screen === "messages") {
+        this.dropHiddenConversation();
+        this.activeConversationId = null;
+        this.messageLock = "none";
+      }
       this.show(message.destination, true);
       this.pushState();
       if (this.auth.isAuthenticated() && message.destination === "settings") {
@@ -895,7 +900,11 @@ export class SessionFlow {
     try {
       status = await this.auth.blockStatus(userId);
     } catch {
-      return;
+      const reported = data as { blockedByMe?: unknown; blockedMe?: unknown };
+      const blockedByMe = reported.blockedByMe === true;
+      const blockedMe = reported.blockedMe === true;
+      if (!blockedByMe && !blockedMe) return;
+      status = { blockedByMe, blockedMe };
     }
     if (this.blockEpoch.get(userId) !== epoch) return;
     const locked = status.blockedByMe || status.blockedMe;
@@ -906,7 +915,10 @@ export class SessionFlow {
       if (this.typing?.userId === userId) this.typing = null;
       this.searchResults = this.searchResults.filter((user) => user.id !== userId);
       this.friends = this.friends.filter((user) => user.id !== userId);
-      this.conversations = this.conversations.filter((conversation) => conversation.id === this.activeConversationId || !conversation.participantIds.includes(userId));
+      this.conversations = this.conversations.filter((conversation) => {
+        if (!conversation.participantIds.includes(userId)) return true;
+        return conversation.id === this.activeConversationId;
+      });
     } else {
       this.hiddenPresence.delete(userId);
       if (presence && (presence.status === "ONLINE" || presence.status === "OFFLINE")) {
@@ -939,6 +951,16 @@ export class SessionFlow {
   private rememberPreview(conversationId: string, text: string | undefined): void {
     const preview = text?.trim();
     if (preview) this.conversationPreviews[conversationId] = preview;
+  }
+
+  hidesUser(userId: string): boolean {
+    return this.hiddenPresence.has(userId) || this.blockedUsers.some((user) => user.id === userId);
+  }
+
+  private dropHiddenConversation(): void {
+    if (this.messageLock === "none" || !this.activeConversationId) return;
+    const id = this.activeConversationId;
+    this.conversations = this.conversations.filter((conversation) => conversation.id !== id);
   }
 
   private scheduleConversationRead(conversationId: string): void {
@@ -975,7 +997,7 @@ export class SessionFlow {
       const status = await this.auth.blockStatus(otherId);
       this.messageLock = status.blockedByMe ? "blocked-by-me" : status.blockedMe ? "blocked-me" : "none";
     } catch {
-      this.messageLock = "none";
+      // A failed status check must not clear a block that is already on screen.
     }
     return this.messageLock;
   }

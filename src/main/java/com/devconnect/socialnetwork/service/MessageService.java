@@ -115,8 +115,11 @@ public class MessageService {
         }
         conversationService.touch(conversation);
         MessageResponse response = messageMapper.toResponse(message);
-        push("MESSAGE", response, recipientId);
         push("MESSAGE", response, senderId);
+        if (blockService.eitherBlocked(senderId, recipientId)) {
+            return new WriteResult<>(response, true);
+        }
+        push("MESSAGE", response, recipientId);
         if (sessionRegistry.isOnline(recipientId)) {
             markDelivered(message);
             response = messageMapper.toResponse(message);
@@ -287,6 +290,9 @@ public class MessageService {
         for (MessageEntity message : messageRepository.findTop20ByRecipientIdAndStatusOrderByCreatedAtAsc(
                 userId, MessageStatus.SENT)) {
             if (message.getDeletedForUserIds().contains(userId) || message.isDeletedForEveryone()) {
+                continue;
+            }
+            if (blockService.eitherBlocked(userId, message.getSenderId())) {
                 continue;
             }
             push("MESSAGE", messageMapper.toResponse(message), userId);
