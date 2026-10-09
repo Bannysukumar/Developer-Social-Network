@@ -60,15 +60,16 @@ public class AttachmentController {
     @GetMapping("/api/v1/attachments/{attachmentId}")
     @Operation(summary = "Download ciphertext for an attachment the caller may see")
     public ResponseEntity<StreamingResponseBody> download(@PathVariable String attachmentId) {
-        InputStream body = attachmentService.open(SecurityUtils.currentUserId(), attachmentId);
+        AttachmentService.OpenedAttachment opened = attachmentService.open(SecurityUtils.currentUserId(), attachmentId);
         StreamingResponseBody stream = output -> {
-            try (InputStream input = body) {
+            try (InputStream input = opened.body()) {
                 input.transferTo(output);
             }
         };
         return ResponseEntity.ok()
                 .contentType(MediaType.APPLICATION_OCTET_STREAM)
-                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"download\"")
+                .contentLength(opened.size())
+                .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"file\"")
                 .header("X-Content-Type-Options", "nosniff")
                 .body(stream);
     }

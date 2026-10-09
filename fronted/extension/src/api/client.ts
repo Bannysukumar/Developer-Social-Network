@@ -104,7 +104,7 @@ export class ApiClient {
     }
 
     const headers: Record<string, string> = {
-      Accept: options.binary ? "application/octet-stream" : "application/json",
+      Accept: options.binary ? "*/*" : "application/json",
     };
     if (typeof body === "string") {
       headers["Content-Type"] = "application/json";
@@ -160,7 +160,16 @@ export class ApiClient {
         throw await this.toHttpError(response);
       }
       if (options.binary) {
-        return new Uint8Array(await response.arrayBuffer());
+        let buffer: ArrayBuffer;
+        try {
+          buffer = await response.arrayBuffer();
+        } catch {
+          if (controller.signal.aborted && controller.signal.reason === "timeout") {
+            throw new ApiError("timeout", "The DevConnect API request timed out.");
+          }
+          throw new ApiError("network", "Could not reach the DevConnect API.");
+        }
+        return new Uint8Array(buffer);
       }
       if (response.status === 204) {
         if (dataSchema) {
@@ -200,10 +209,13 @@ export class ApiClient {
 
   async bytes(path: string, options: ApiRequestOptions = {}): Promise<Uint8Array> {
     const data = await this.request(path, undefined, { ...options, binary: true, timeoutMs: options.timeoutMs ?? 60_000 });
-    if (!(data instanceof Uint8Array)) {
-      throw new ApiError("invalid_response", "The DevConnect API returned an unexpected response.");
+    if (data instanceof Uint8Array) {
+      return new Uint8Array(data);
     }
-    return data;
+    if (data instanceof ArrayBuffer) {
+      return new Uint8Array(data);
+    }
+    throw new ApiError("invalid_response", "The DevConnect API returned an unexpected response.");
   }
 
   private async toHttpError(response: Response): Promise<ApiError> {

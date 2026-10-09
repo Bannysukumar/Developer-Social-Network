@@ -235,11 +235,11 @@ export function renderWebview(webview: Webview, state: HostState): string {
   .composer-row { display: flex; align-items: flex-end; gap: 8px; min-width: 0; }
   .composer-field { flex: 1; min-width: 0; }
   .composer textarea { min-height: 36px; max-height: 120px; resize: none; }
-  .attach-wrap { position: relative; flex: none; }
+  .attach-wrap { position: relative; flex: none; z-index: 4; }
   .attach-btn, .send-btn { width: 36px; height: 36px; min-width: 36px; min-height: 36px; border-radius: 8px; padding: 0; display: inline-grid; place-items: center; }
   .attach-btn:hover { background: var(--vscode-toolbar-hoverBackground, var(--vscode-list-hoverBackground)); }
   .attach-btn:focus-visible, .send-btn:focus-visible, .attach-menu .btn:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 2px; }
-  .attach-btn svg, .file-glyph { width: 18px; height: 18px; display: block; }
+  .attach-btn svg, .file-glyph { width: 18px; height: 18px; display: block; pointer-events: none; }
   .attach-menu { position: absolute; bottom: 42px; left: 0; z-index: 5; min-width: 196px; display: grid; gap: 2px; padding: 6px; border-radius: 8px; background: var(--vscode-menu-background, var(--vscode-editorWidget-background)); color: var(--vscode-menu-foreground, var(--vscode-foreground)); border: 1px solid var(--vscode-menu-border, var(--vscode-panel-border)); box-shadow: 0 8px 24px color-mix(in srgb, var(--vscode-widget-shadow, #000) 28%, transparent); }
   .attach-menu .btn { width: 100%; justify-content: flex-start; text-align: left; }
   .attach-panel { display: flex; gap: 8px; overflow-x: auto; padding: 8px; border: 1px solid var(--vscode-panel-border); border-radius: 10px; background: var(--vscode-input-background); }
@@ -559,7 +559,7 @@ export function renderWebview(webview: Webview, state: HostState): string {
         <button class="btn quiet" type="button" data-settings="menu">Settings</button>
         <h1>About</h1>
         <p>DevConnect</p>
-        <p class="muted" id="about-version">Version 0.4.28</p>
+        <p class="muted" id="about-version">Version 0.4.29</p>
         <p class="muted">A developer network inside Visual Studio Code. Messages stay encrypted on your devices.</p>
       </div>
     </section>
@@ -1049,7 +1049,7 @@ export function renderWebview(webview: Webview, state: HostState): string {
     document.getElementById("dialog").hidden = true;
   }
   document.body.addEventListener("click", (event) => {
-    const raw = event.target instanceof HTMLElement ? event.target : null;
+    const raw = event.target instanceof Element ? event.target : null;
     if (attachMenuOpen && (!raw || !raw.closest(".attach-wrap"))) {
       attachMenuOpen = false;
       const menu = document.getElementById("attach-menu");
@@ -1122,6 +1122,11 @@ export function renderWebview(webview: Webview, state: HostState): string {
     if (act === "pick-files") {
       const input = document.getElementById("file-input");
       const kind = id;
+      attachMenuOpen = false;
+      const menu = document.getElementById("attach-menu");
+      const button = document.getElementById("attach-btn");
+      if (menu) menu.hidden = true;
+      if (button) button.setAttribute("aria-expanded", "false");
       if (input instanceof HTMLInputElement) {
         input.accept = kind === "image"
           ? "image/png,image/jpeg,image/gif,image/webp"
@@ -1130,8 +1135,6 @@ export function renderWebview(webview: Webview, state: HostState): string {
             : "";
         input.click();
       }
-      attachMenuOpen = false;
-      apply(state);
       return;
     }
     if (act === "clear-files") {

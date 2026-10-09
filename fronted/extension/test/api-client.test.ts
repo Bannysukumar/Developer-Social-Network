@@ -214,7 +214,7 @@ describe("central API client", () => {
     const downloaded = await client.bytes("attachments/att-1");
     expect(Array.from(downloaded)).toEqual(Array.from(ciphertext));
     const downloadHeaders = new Headers(upload?.headers);
-    expect(downloadHeaders.get("accept")).toBe("application/octet-stream");
+    expect(downloadHeaders.get("accept")).toBe("*/*");
     expect(downloadHeaders.get("authorization")).toBe("Bearer access-token");
   });
 

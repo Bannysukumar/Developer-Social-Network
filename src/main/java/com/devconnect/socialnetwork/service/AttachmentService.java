@@ -70,7 +70,7 @@ public class AttachmentService {
         return new AttachmentCreatedResponse(entity.getId(), entity.getSize());
     }
 
-    public InputStream open(String userId, String attachmentId) {
+    public OpenedAttachment open(String userId, String attachmentId) {
         AttachmentEntity attachment = require(attachmentId);
         conversationService.requireMember(userId, attachment.getConversationId());
         if (attachment.getMessageId() == null) {
@@ -86,7 +86,10 @@ public class AttachmentService {
                 throw new ResourceNotFoundException("Resource not found");
             }
         }
-        return fileStorageService.openKey(attachment.getStorageKey());
+        return new OpenedAttachment(fileStorageService.sizeKey(attachment.getStorageKey()), fileStorageService.openKey(attachment.getStorageKey()));
+    }
+
+    public record OpenedAttachment(long size, InputStream body) {
     }
 
     public void reserve(String userId, String conversationId, List<String> attachmentIds) {

@@ -1071,11 +1071,14 @@ export class SessionFlow {
   }
 
   private imageFailureText(error: unknown): string {
+    if (error instanceof Error && error.message === "This file could not be opened.") return "Couldn't open this image.";
     if (error instanceof ApiError) {
       if (error.status === 404) return "This image is no longer available.";
       if (error.status === 401 || error.status === 403) return "You don't have access to this image.";
+      if (error.kind === "timeout") return "The image took too long to load.";
+      if (error.kind === "network") return "Couldn't reach DevConnect to load this image.";
+      if (error.status !== undefined && error.status >= 500) return "Couldn't load this image. Try again.";
     }
-    if (error instanceof Error && error.message === "This file could not be opened.") return "Couldn't open this image.";
     return "Couldn't load this image.";
   }
 
@@ -1097,21 +1100,29 @@ export class SessionFlow {
       const epoch = (this.imageEpoch.get(file.id) ?? 0) + 1;
       this.imageEpoch.set(file.id, epoch);
       this.imageFlight.set(file.id, epoch);
-      void this.auth.downloadAttachment(file.id, file.key, file.iv).then((bytes) => {
-        if (this.imageEpoch.get(file.id) !== epoch) return;
-        const mime = file.mime.startsWith("image/") ? file.mime : "image/jpeg";
-        this.rememberImage(file.id, `data:${mime};base64,${Buffer.from(bytes).toString("base64")}`);
-        this.imageErrors.delete(file.id);
-        this.imageErrorText.delete(file.id);
-      }).catch((error: unknown) => {
-        if (this.imageEpoch.get(file.id) !== epoch) return;
-        this.imageErrors.add(file.id);
-        this.imageErrorText.set(file.id, this.imageFailureText(error));
-      }).finally(() => {
-        if (this.imageFlight.get(file.id) === epoch) this.imageFlight.delete(file.id);
-        if (this.imageEpoch.get(file.id) === epoch) this.pushState();
-      });
+      void this.loadImage(file.id, file.key, file.iv, file.mime, epoch);
     }
+  }
+
+  private loadImage(id: string, key: string, iv: string, mime: string, epoch: number): Promise<void> {
+    const attempt = (retry: boolean): Promise<void> => this.auth.downloadAttachment(id, key, iv).then((bytes) => {
+      if (this.imageEpoch.get(id) !== epoch) return;
+      const type = mime.startsWith("image/") ? mime.split(";")[0] : "image/jpeg";
+      this.rememberImage(id, `data:${type};base64,${Buffer.from(bytes).toString("base64")}`);
+      this.imageErrors.delete(id);
+      this.imageErrorText.delete(id);
+    }).catch((error: unknown) => {
+      if (this.imageEpoch.get(id) !== epoch) return;
+      const transient = error instanceof ApiError && (error.kind === "network" || error.kind === "timeout" || (error.status !== undefined && error.status >= 500));
+      if (transient && retry) return attempt(false);
+      this.imageErrors.add(id);
+      this.imageErrorText.set(id, this.imageFailureText(error));
+      return undefined;
+    });
+    return attempt(true).finally(() => {
+      if (this.imageFlight.get(id) === epoch) this.imageFlight.delete(id);
+      if (this.imageEpoch.get(id) === epoch) this.pushState();
+    });
   }
 
   hidesUser(userId: string): boolean {

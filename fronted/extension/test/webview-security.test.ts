@@ -47,6 +47,9 @@ describe("Webview security shell", () => {
     expect(html).toContain("attach-menu");
     expect(html).toContain("prefers-reduced-motion: no-preference");
     expect(html).toContain("aria-label=\"Uploading\"");
+    expect(html).toContain("pointer-events: none");
+    expect(html).toContain("event.target instanceof Element");
+    expect(html.match(/document\.body\.addEventListener\("click"/g)?.length).toBe(1);
     expect(html).not.toContain("View image");
     expect(html).not.toContain("No messages yet. Say hello.");
   });

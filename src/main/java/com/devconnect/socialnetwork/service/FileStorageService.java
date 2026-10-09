@@ -112,6 +112,14 @@ public class FileStorageService {
         }
     }
 
+    public long sizeKey(String storageKey) {
+        try {
+            return Files.size(resolveKey(storageKey));
+        } catch (IOException ex) {
+            throw new ResourceNotFoundException("Resource not found");
+        }
+    }
+
     public void deleteKey(String storageKey) {
         if (storageKey == null || storageKey.isBlank()) {
             return;
