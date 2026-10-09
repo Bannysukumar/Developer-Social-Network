@@ -32,6 +32,7 @@ import { SessionStore } from "./session";
 export interface DisplayMessage extends MessageDto {
   readonly displayText: string;
   readonly sendState?: "failed" | "sending";
+  readonly sendError?: string;
   readonly attachments?: readonly SharedFile[];
 }
 

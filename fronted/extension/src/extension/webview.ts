@@ -205,7 +205,14 @@ export function renderWebview(webview: Webview, state: HostState): string {
     .typing i:nth-child(2) { animation-delay: .2s; }
     .typing i:nth-child(3) { animation-delay: .4s; }
     @keyframes blink { 50% { opacity: .2; } }
-    .nav-btn { transition: background 120ms linear; }
+    .nav-btn, .attach-btn, .send-btn { transition: background 120ms linear, transform 80ms linear; }
+    .attach-btn:active, .send-btn:active { transform: translateY(1px); }
+    .image-bubble img { animation: image-in 160ms ease; }
+    .image-bubble.loading::after { animation: shimmer 1.2s ease-in-out infinite; }
+    .upload-bar::before { animation: upload-slide 1s linear infinite; }
+    @keyframes image-in { from { opacity: 0; } to { opacity: 1; } }
+    @keyframes shimmer { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+    @keyframes upload-slide { from { transform: translateX(-120%); } to { transform: translateX(280%); } }
     @keyframes spin { to { transform: rotate(360deg); } }
   }
   .badge { min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; display: inline-grid; place-items: center; background: var(--vscode-activityBarBadge-background, var(--vscode-badge-background)); color: var(--vscode-activityBarBadge-foreground, var(--vscode-badge-foreground)); font-size: 10px; }
@@ -224,18 +231,39 @@ export function renderWebview(webview: Webview, state: HostState): string {
   .thread-person strong, .thread-person span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .icon-btn { width: 28px; min-width: 28px; padding: 0; }
   #thread { flex: 1; min-height: 0; height: 100%; display: flex; flex-direction: column; justify-content: flex-start; gap: 8px; }
-  .composer { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: end; flex: 0 0 auto; position: sticky; bottom: 0; padding: 8px 0; background: var(--vscode-editor-background); }
-  .composer textarea { min-height: 36px; max-height: 120px; }
-  .attach-tray { grid-column: 1 / -1; display: flex; gap: 8px; flex-wrap: wrap; }
-  .attach-chip { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .attach-chip img { height: 48px; width: auto; max-width: 72px; object-fit: contain; border-radius: 6px; vertical-align: middle; }
-  .file-card { display: flex; gap: 8px; align-items: center; margin-top: 6px; }
+  .composer { display: flex; flex-direction: column; gap: 8px; flex: 0 0 auto; position: sticky; bottom: 0; padding: 8px 0; background: var(--vscode-editor-background); }
+  .composer-row { display: flex; align-items: flex-end; gap: 8px; min-width: 0; }
+  .composer-field { flex: 1; min-width: 0; }
+  .composer textarea { min-height: 36px; max-height: 120px; resize: none; }
+  .attach-wrap { position: relative; flex: none; }
+  .attach-btn, .send-btn { width: 36px; height: 36px; min-width: 36px; min-height: 36px; border-radius: 8px; padding: 0; display: inline-grid; place-items: center; }
+  .attach-btn:hover { background: var(--vscode-toolbar-hoverBackground, var(--vscode-list-hoverBackground)); }
+  .attach-btn:focus-visible, .send-btn:focus-visible, .attach-menu .btn:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 2px; }
+  .attach-btn svg, .file-glyph { width: 18px; height: 18px; display: block; }
+  .attach-menu { position: absolute; bottom: 42px; left: 0; z-index: 5; min-width: 196px; display: grid; gap: 2px; padding: 6px; border-radius: 8px; background: var(--vscode-menu-background, var(--vscode-editorWidget-background)); color: var(--vscode-menu-foreground, var(--vscode-foreground)); border: 1px solid var(--vscode-menu-border, var(--vscode-panel-border)); box-shadow: 0 8px 24px color-mix(in srgb, var(--vscode-widget-shadow, #000) 28%, transparent); }
+  .attach-menu .btn { width: 100%; justify-content: flex-start; text-align: left; }
+  .attach-panel { display: flex; gap: 8px; overflow-x: auto; padding: 8px; border: 1px solid var(--vscode-panel-border); border-radius: 10px; background: var(--vscode-input-background); }
+  .attach-card { position: relative; flex: none; width: 112px; display: grid; gap: 4px; }
+  .attach-card img, .attach-card .file-glyph-box { width: 112px; height: 84px; object-fit: contain; border-radius: 8px; background: color-mix(in srgb, var(--vscode-foreground) 6%, transparent); }
+  .attach-card .file-glyph-box { display: grid; place-items: center; }
+  .attach-card .name, .attach-card .size { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+  .attach-card .remove { position: absolute; top: 4px; right: 4px; width: 22px; height: 22px; min-width: 22px; padding: 0; border-radius: 11px; }
+  .file-card { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 6px; min-width: 0; }
+  .file-card span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .image-frame { position: relative; display: inline-block; max-width: 100%; }
   .image-bubble { display: block; padding: 0; border: 0; background: transparent; max-width: 100%; }
-  .image-bubble img { display: block; max-width: min(240px, 100%); max-height: 280px; width: auto; height: auto; object-fit: contain; border-radius: 12px; }
-  .image-bubble.loading { width: 180px; height: 120px; border-radius: 12px; background: var(--vscode-input-background); }
-  .lightbox { position: fixed; inset: 0; background: rgba(0,0,0,.72); display: flex; align-items: center; justify-content: center; z-index: 30; }
-  .lightbox img { max-width: 92%; max-height: 92%; object-fit: contain; }
-  .send-btn { width: 32px; min-height: 32px; border-radius: 16px; padding: 0; }
+  .image-bubble img { display: block; max-width: min(240px, 100%); max-height: 280px; width: auto; height: auto; object-fit: contain; border-radius: 12px; background: var(--vscode-input-background); }
+  .image-bubble.loading { width: min(220px, 100%); height: 148px; border-radius: 12px; background: var(--vscode-input-background); position: relative; overflow: hidden; }
+  .image-bubble.loading::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--vscode-foreground) 14%, transparent), transparent); }
+  .image-error { display: grid; gap: 6px; min-width: 140px; padding: 8px; border-radius: 12px; background: var(--vscode-input-background); }
+  .upload-bar { position: absolute; left: 8px; right: 8px; bottom: 8px; height: 3px; border-radius: 2px; overflow: hidden; background: color-mix(in srgb, var(--vscode-foreground) 25%, transparent); }
+  .upload-bar::before { content: ""; display: block; width: 40%; height: 100%; background: var(--vscode-progressBar-background, var(--vscode-focusBorder)); }
+  .lightbox { position: fixed; inset: 0; background: color-mix(in srgb, #000 72%, transparent); display: flex; align-items: center; justify-content: center; z-index: 30; padding: 16px; }
+  .viewer { width: min(100%, 920px); max-height: 100%; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; gap: 8px; }
+  .viewer img { max-width: 100%; max-height: calc(100vh - 120px); object-fit: contain; justify-self: center; border-radius: 8px; }
+  .viewer.zoomed { overflow: auto; }
+  .viewer.zoomed img { max-width: none; max-height: none; cursor: zoom-out; }
+  .viewer-bar, .viewer-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
   .chat-empty { display: grid; justify-items: start; text-align: left; gap: 6px; align-self: stretch; padding: 8px 0; }
   .msg-meta { margin-top: 4px; font-size: 11px; color: var(--vscode-descriptionForeground); }
   .msg.failed { outline: 1px solid var(--vscode-errorForeground); }
@@ -424,13 +452,22 @@ export function renderWebview(webview: Webview, state: HostState): string {
         <button class="btn" type="button" id="jump-latest" hidden>↓ New messages</button>
         <p class="muted" id="thread-block" hidden>You blocked this user.</p>
         <form id="message-form" class="composer">
-          <div id="attach-tray" class="attach-tray"></div>
-          <label>Message
-            <textarea name="text" maxlength="4000" rows="1" placeholder="Write a message..."></textarea>
-          </label>
-          <button class="btn quiet" id="attach-btn" type="button" aria-label="Attach files">＋</button>
+          <div id="attach-tray" class="attach-panel" hidden></div>
+          <div class="composer-row">
+            <div class="attach-wrap">
+              <button class="btn quiet attach-btn" id="attach-btn" type="button" data-act="toggle-attach" data-id="attach" aria-label="Attach files" aria-haspopup="menu" aria-expanded="false" title="Attach files"><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M8.2 12.4 14.6 6a3.2 3.2 0 0 1 4.5 4.5l-8.2 8.2a4.6 4.6 0 0 1-6.5-6.5l7.4-7.4"/></svg></button>
+              <div id="attach-menu" class="attach-menu" role="menu" hidden>
+                <button class="btn quiet" type="button" role="menuitem" data-act="pick-files" data-id="image">Photos and images</button>
+                <button class="btn quiet" type="button" role="menuitem" data-act="pick-files" data-id="document">Documents and archives</button>
+                <button class="btn quiet" type="button" role="menuitem" data-act="pick-files" data-id="any">Browse files</button>
+              </div>
+            </div>
+            <label class="composer-field">Message
+              <textarea name="text" maxlength="4000" rows="1" placeholder="Write a message..."></textarea>
+            </label>
+            <button class="btn primary send-btn" id="send-btn" type="submit" aria-label="Send" title="Send" disabled>➤</button>
+          </div>
           <input id="file-input" type="file" multiple hidden>
-          <button class="btn primary send-btn" id="send-btn" type="submit" aria-label="Send" disabled>➤</button>
         </form>
         <div id="lightbox" class="lightbox" hidden></div>
       </div>
@@ -522,7 +559,7 @@ export function renderWebview(webview: Webview, state: HostState): string {
         <button class="btn quiet" type="button" data-settings="menu">Settings</button>
         <h1>About</h1>
         <p>DevConnect</p>
-        <p class="muted" id="about-version">Version 0.4.27</p>
+        <p class="muted" id="about-version">Version 0.4.28</p>
         <p class="muted">A developer network inside Visual Studio Code. Messages stay encrypted on your devices.</p>
       </div>
     </section>
@@ -642,6 +679,7 @@ export function renderWebview(webview: Webview, state: HostState): string {
     return "Offline";
   }
   let pendingFiles = [];
+  let attachMenuOpen = false;
   function fileSize(size) {
     const value = Number(size) || 0;
     if (value < 1024) return value + " B";
@@ -862,20 +900,21 @@ export function renderWebview(webview: Webview, state: HostState): string {
       const files = (m.attachments || []).map((file) => {
         if (file.mime && file.mime.startsWith("image/")) {
           if (file.preview) {
-            return '<button class="image-bubble" type="button" data-act="open-preview" data-id="' + esc(file.id) + '" data-message="' + esc(m.id) + '"><img src="' + esc(file.preview) + '" alt="' + esc(file.name) + '"></button>';
+            const uploading = m.sendState === "sending" ? '<span class="upload-bar" role="status" aria-label="Uploading"></span>' : "";
+            return '<div class="image-frame"><button class="image-bubble" type="button" data-act="open-preview" data-id="' + esc(file.id) + '" data-message="' + esc(m.id) + '" data-name="' + esc(file.name) + '"><img src="' + esc(file.preview) + '" alt="' + esc(file.name) + '"></button>' + uploading + '</div>';
           }
           if (file.loadError) {
-            return '<div class="file-card"><span>Couldn\\'t load this image.</span><button class="btn" type="button" data-act="reload-image" data-id="' + esc(m.id) + '" data-file="' + esc(file.id) + '">Try again</button></div>';
+            return '<div class="image-error"><span>' + esc(file.loadDetail || "Couldn't load this image.") + '</span><button class="btn" type="button" data-act="reload-image" data-id="' + esc(m.id) + '" data-file="' + esc(file.id) + '">Try again</button></div>';
           }
           return '<div class="image-bubble loading" role="status" aria-label="Loading image"></div>';
         }
         const save = file.key ? '<button class="btn" type="button" data-act="save-attachment" data-id="' + esc(m.id) + '" data-file="' + esc(file.id) + '">Save</button>' : "";
-        return '<div class="file-card"><span>' + esc(file.name) + '</span><span class="muted">' + esc(fileSize(file.size)) + '</span>' + save + '</div>';
+        return '<div class="file-card"><span class="file-glyph" aria-hidden="true">📄</span><span>' + esc(file.name) + '</span><span class="muted">' + esc(fileSize(file.size)) + '</span>' + save + '</div>';
       }).join("");
       const retryFiles = (m.attachments || []).length && m.id.indexOf("local-") === 0
         ? '<button class="btn" type="button" data-act="retry-files" data-id="' + esc(m.id) + '">Retry</button>'
         : retry;
-      return '<div class="msg ' + (mine ? "mine" : "theirs") + (failed ? " failed" : "") + (deleted ? " deleted" : "") + '">' + (deleted ? "" : files) + (m.displayText ? esc(m.displayText) : "") + '<div class="msg-meta">' + esc(clock(m.createdAt)) + receipt + actions + '</div>' + menu + (failed ? '<div class="msg-meta">Message failed to send.</div>' + retryFiles : "") + '</div>';
+      return '<div class="msg ' + (mine ? "mine" : "theirs") + (failed ? " failed" : "") + (deleted ? " deleted" : "") + '">' + (deleted ? "" : files) + (m.displayText ? esc(m.displayText) : "") + '<div class="msg-meta">' + esc(clock(m.createdAt)) + receipt + actions + '</div>' + menu + (failed ? '<div class="msg-meta">' + esc(m.sendError || "Message failed to send.") + '</div>' + retryFiles : "") + '</div>';
     }).join("") : '<div class="chat-empty">' + avatarMarkup({ displayName: person.name, username: person.username }, "lg") + '<strong>You\\'re connected with ' + esc(person.name) + '</strong><span class="muted">Start the conversation by saying hello.</span></div>';
     if (nearBottom || ordered.length < 2) {
       list.scrollTop = list.scrollHeight;
@@ -978,15 +1017,23 @@ export function renderWebview(webview: Webview, state: HostState): string {
     if (attachBtn) attachBtn.disabled = !!state.busy || lock !== "none";
     const tray = document.getElementById("attach-tray");
     if (tray) {
-      tray.innerHTML = pendingFiles.map((item, index) =>
-        '<span class="attach-chip">' + (item.preview ? '<img src="' + esc(item.preview) + '" alt="">' : esc(item.file.name)) + ' <button class="btn quiet" type="button" data-act="remove-file" data-id="file" data-index="' + index + '" aria-label="Remove">×</button></span>'
-      ).join("");
+      tray.hidden = pendingFiles.length === 0;
+      tray.innerHTML = pendingFiles.map((item, index) => {
+        const visual = item.preview
+          ? '<img src="' + esc(item.preview) + '" alt="">'
+          : '<div class="file-glyph-box" aria-hidden="true">📄</div>';
+        return '<div class="attach-card">' + visual + '<button class="btn quiet remove" type="button" data-act="remove-file" data-id="file" data-index="' + index + '" aria-label="Remove ' + esc(item.file.name) + '">×</button><span class="name">' + esc(item.file.name) + '</span><span class="size muted">' + esc(fileSize(item.file.size)) + '</span></div>';
+      }).join("") + (pendingFiles.length ? '<button class="btn quiet" type="button" data-act="clear-files" data-id="files">Cancel</button>' : "");
     }
+    const attachMenu = document.getElementById("attach-menu");
+    const attachButton = document.getElementById("attach-btn");
+    if (attachMenu) attachMenu.hidden = !attachMenuOpen;
+    if (attachButton) attachButton.setAttribute("aria-expanded", attachMenuOpen ? "true" : "false");
     document.getElementById("device-list").innerHTML = (state.devices || []).length ? state.devices.map((d) =>
       '<div class="card"><strong>' + esc(d.deviceName || d.id) + '</strong><span class="muted">' + esc(d.platform || "") + '</span><button class="btn" data-act="revoke" data-id="' + esc(d.id) + '">Revoke</button></div>'
     ).join("") : '<p class="muted">No devices listed.</p>';
     document.querySelectorAll("button, input, textarea, select").forEach((el) => {
-      if (el.id === "back-btn" || el.id === "thread-back" || el.id === "thread-profile" || el.id === "send-btn" || el.id === "chat-filter" || el.id === "jump-latest" || el.id === "retry" || el.id === "dialog-ok" || el.id === "dialog-cancel" || el.id === "edit-profile" || el.id === "close-edit" || el.hasAttribute("data-go") || el.hasAttribute("data-toggle") || el.hasAttribute("data-settings") || el.hasAttribute("data-friend-tab") || el.classList.contains("toggle")) return;
+      if (el.id === "back-btn" || el.id === "thread-back" || el.id === "thread-profile" || el.id === "send-btn" || el.id === "chat-filter" || el.id === "jump-latest" || el.id === "retry" || el.id === "dialog-ok" || el.id === "dialog-cancel" || el.id === "edit-profile" || el.id === "close-edit" || el.hasAttribute("data-go") || el.hasAttribute("data-toggle") || el.hasAttribute("data-settings") || el.hasAttribute("data-friend-tab") || el.classList.contains("toggle") || el.closest("#lightbox")) return;
       el.disabled = !!state.busy;
     });
   }
@@ -1002,7 +1049,15 @@ export function renderWebview(webview: Webview, state: HostState): string {
     document.getElementById("dialog").hidden = true;
   }
   document.body.addEventListener("click", (event) => {
-    const target = event.target instanceof HTMLElement ? event.target.closest("button, [data-toggle]") : null;
+    const raw = event.target instanceof HTMLElement ? event.target : null;
+    if (attachMenuOpen && (!raw || !raw.closest(".attach-wrap"))) {
+      attachMenuOpen = false;
+      const menu = document.getElementById("attach-menu");
+      const button = document.getElementById("attach-btn");
+      if (menu) menu.hidden = true;
+      if (button) button.setAttribute("aria-expanded", "false");
+    }
+    const target = raw ? raw.closest("button, [data-toggle]") : null;
     if (!(target instanceof HTMLElement)) return;
     if (target.hasAttribute("data-settings")) {
       settingsPane = target.getAttribute("data-settings") || "menu";
@@ -1027,7 +1082,7 @@ export function renderWebview(webview: Webview, state: HostState): string {
     const act = target.getAttribute("data-act");
     const id = target.getAttribute("data-id");
     if (!act || !id) return;
-    if (state.busy && act !== "open-preview" && act !== "save-attachment" && act !== "reload-image" && act !== "retry-files") return;
+    if (state.busy && act !== "open-preview" && act !== "save-attachment" && act !== "reload-image" && act !== "retry-files" && act !== "close-preview") return;
     if (act === "open-user") vscode.postMessage({ version: 1, type: "openUser", userId: id });
     if (act === "friend") vscode.postMessage({ version: 1, type: "sendFriendRequest", userId: id });
     if (act === "accept") vscode.postMessage({ version: 1, type: "acceptFriendRequest", requestId: id });
@@ -1059,9 +1114,39 @@ export function renderWebview(webview: Webview, state: HostState): string {
       );
       return;
     }
+    if (act === "toggle-attach") {
+      attachMenuOpen = !attachMenuOpen;
+      apply(state);
+      return;
+    }
+    if (act === "pick-files") {
+      const input = document.getElementById("file-input");
+      const kind = id;
+      if (input instanceof HTMLInputElement) {
+        input.accept = kind === "image"
+          ? "image/png,image/jpeg,image/gif,image/webp"
+          : kind === "document"
+            ? ".pdf,.zip,.txt,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.csv,.json,.md"
+            : "";
+        input.click();
+      }
+      attachMenuOpen = false;
+      apply(state);
+      return;
+    }
+    if (act === "clear-files") {
+      pendingFiles = [];
+      apply(state);
+      return;
+    }
     if (act === "remove-file") {
       pendingFiles.splice(Number(target.getAttribute("data-index")), 1);
       apply(state);
+      return;
+    }
+    if (act === "close-preview") {
+      const box = document.getElementById("lightbox");
+      if (box) box.hidden = true;
       return;
     }
     if (act === "reload-image") {
@@ -1078,8 +1163,13 @@ export function renderWebview(webview: Webview, state: HostState): string {
       const box = document.getElementById("lightbox");
       if (box && src) {
         box.hidden = false;
-        box.innerHTML = '<img src="' + esc(src) + '" alt=""><button class="btn" type="button" data-act="save-attachment" data-id="' + esc(target.getAttribute("data-message") || "") + '" data-file="' + esc(id) + '">Save</button>';
+        box.innerHTML = '<div class="viewer" role="dialog" aria-label="Image preview"><div class="viewer-top"><span class="muted">' + esc(target.getAttribute("data-name") || "Image") + '</span><button class="btn quiet" type="button" data-act="close-preview" data-id="preview">Close</button></div><img src="' + esc(src) + '" alt="' + esc(target.getAttribute("data-name") || "Image") + '" data-act="zoom-preview" data-id="preview"><div class="viewer-bar"><button class="btn" type="button" data-act="save-attachment" data-id="' + esc(target.getAttribute("data-message") || "") + '" data-file="' + esc(id) + '">Save</button></div></div>';
       }
+      return;
+    }
+    if (act === "zoom-preview") {
+      const viewer = target.closest(".viewer");
+      if (viewer) viewer.classList.toggle("zoomed");
       return;
     }
     if (act === "download-file") {
@@ -1144,7 +1234,20 @@ export function renderWebview(webview: Webview, state: HostState): string {
   document.getElementById("activity-status").addEventListener("click", () => vscode.postMessage({ version: 1, type: "updateProfile", showActivityStatus: !(state.user && state.user.showActivityStatus !== false) }));
   document.getElementById("dialog-cancel").addEventListener("click", () => { closeDialog(); apply(state); });
   document.getElementById("dialog-ok").addEventListener("click", () => { const action = dialogAction; closeDialog(); if (action) action(); });
-  document.addEventListener("keydown", (event) => { if (event.key === "Escape" && !document.getElementById("dialog").hidden) closeDialog(); });
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    const box = document.getElementById("lightbox");
+    if (box && !box.hidden) {
+      box.hidden = true;
+      return;
+    }
+    if (attachMenuOpen) {
+      attachMenuOpen = false;
+      apply(state);
+      return;
+    }
+    if (!document.getElementById("dialog").hidden) closeDialog();
+  });
   document.getElementById("remove-avatar").addEventListener("click", () => vscode.postMessage({ version: 1, type: "removeAvatar" }));
   document.getElementById("avatar-file").addEventListener("change", (event) => {
     const input = event.target;
@@ -1195,7 +1298,6 @@ export function renderWebview(webview: Webview, state: HostState): string {
     }
     apply(state);
   }
-  document.getElementById("attach-btn").addEventListener("click", () => document.getElementById("file-input").click());
   document.getElementById("file-input").addEventListener("change", (event) => {
     const input = event.target;
     if (input instanceof HTMLInputElement && input.files) addPending(input.files);
@@ -1208,9 +1310,14 @@ export function renderWebview(webview: Webview, state: HostState): string {
     if (event.dataTransfer && event.dataTransfer.files) addPending(event.dataTransfer.files);
   });
   document.getElementById("lightbox").addEventListener("click", (event) => {
-    const target = event.target;
-    if (target instanceof HTMLElement && target.closest("[data-act='save-attachment']")) return;
-    document.getElementById("lightbox").hidden = true;
+    const box = document.getElementById("lightbox");
+    if (event.target === box) {
+      box.hidden = true;
+      return;
+    }
+    const target = event.target instanceof HTMLElement ? event.target.closest("[data-act='zoom-preview']") : null;
+    const viewer = target instanceof HTMLElement ? target.closest(".viewer") : null;
+    if (viewer) viewer.classList.toggle("zoomed");
   });
   document.getElementById("message-form").addEventListener("submit", (e) => {
     e.preventDefault();

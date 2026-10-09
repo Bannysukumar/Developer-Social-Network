@@ -1,4 +1,5 @@
 import type { ApiClient } from "./client";
+import { ApiError } from "./errors";
 import { pathId } from "./users";
 import {
   attachmentCreatedSchema,
@@ -66,12 +67,22 @@ export class ConversationsApi {
     );
   }
 
-  uploadAttachment(conversationId: string, bytes: Uint8Array): Promise<{ id: string; size: number }> {
-    return this.client.request(`conversations/${pathId(conversationId)}/attachments`, attachmentCreatedSchema, {
-      method: "POST",
-      timeoutMs: 60_000,
-      rawBody: bytes,
-    });
+  async uploadAttachment(conversationId: string, bytes: Uint8Array): Promise<{ id: string; size: number }> {
+    const path = `conversations/${pathId(conversationId)}/attachments`;
+    try {
+      return await this.client.request(path, attachmentCreatedSchema, {
+        method: "POST",
+        timeoutMs: 60_000,
+        rawBody: bytes,
+      });
+    } catch (error) {
+      if (!(error instanceof ApiError) || error.status !== 415) throw error;
+      return this.client.request(path, attachmentCreatedSchema, {
+        method: "POST",
+        timeoutMs: 60_000,
+        multipart: { filename: "blob", contentType: "application/octet-stream", bytes },
+      });
+    }
   }
 
   downloadAttachment(attachmentId: string): Promise<Uint8Array> {

@@ -1,5 +1,5 @@
 import type { ApiConfig } from "../api/config";
-import { isAuthenticationFailure } from "../api/errors";
+import { ApiError, isAuthenticationFailure } from "../api/errors";
 import { notificationDestination, resolveScreen, type ScreenId } from "../shared/flow";
 import { webviewMessageSchema } from "../shared/protocol";
 import type { AuthService } from "./auth-service";
@@ -52,6 +52,7 @@ export class SessionFlow {
   private hiddenPresence = new Set<string>();
   private imagePreviews = new Map<string, string>();
   private imageErrors = new Set<string>();
+  private imageErrorText = new Map<string, string>();
   private imageFlight = new Map<string, number>();
   private imageEpoch = new Map<string, number>();
   private pendingFiles = new Map<string, { conversationId: string; text: string; clientMessageId: string; files: { name: string; mime: string; bytes: Buffer }[] }>();
@@ -328,6 +329,7 @@ export class SessionFlow {
     this.blockEpoch.clear();
     this.imagePreviews.clear();
     this.imageErrors.clear();
+    this.imageErrorText.clear();
     this.imageFlight.clear();
     this.imageEpoch.clear();
     this.pendingFiles.clear();
@@ -855,8 +857,7 @@ export class SessionFlow {
               this.error = detail;
               break;
             }
-            this.messages = this.messages.map((item) => item.id === localId ? { ...item, sendState: "failed" as const } : item);
-            this.error = detail;
+            this.messages = this.messages.map((item) => item.id === localId ? { ...item, sendState: "failed" as const, sendError: detail } : item);
           }
           break;
         }
@@ -868,6 +869,7 @@ export class SessionFlow {
         case "reloadImage": {
           this.imageEpoch.set(message.attachmentId, (this.imageEpoch.get(message.attachmentId) ?? 0) + 1);
           this.imageErrors.delete(message.attachmentId);
+          this.imageErrorText.delete(message.attachmentId);
           this.imagePreviews.delete(message.attachmentId);
           this.imageFlight.delete(message.attachmentId);
           this.pushState();
@@ -1062,9 +1064,19 @@ export class SessionFlow {
           ...file,
           preview: file.preview || this.imagePreviews.get(file.id),
           loadError: this.imageErrors.has(file.id) || undefined,
+          loadDetail: this.imageErrorText.get(file.id),
         })),
       };
     });
+  }
+
+  private imageFailureText(error: unknown): string {
+    if (error instanceof ApiError) {
+      if (error.status === 404) return "This image is no longer available.";
+      if (error.status === 401 || error.status === 403) return "You don't have access to this image.";
+    }
+    if (error instanceof Error && error.message === "This file could not be opened.") return "Couldn't open this image.";
+    return "Couldn't load this image.";
   }
 
   private rememberImage(id: string, dataUrl: string): void {
@@ -1090,9 +1102,11 @@ export class SessionFlow {
         const mime = file.mime.startsWith("image/") ? file.mime : "image/jpeg";
         this.rememberImage(file.id, `data:${mime};base64,${Buffer.from(bytes).toString("base64")}`);
         this.imageErrors.delete(file.id);
-      }).catch(() => {
+        this.imageErrorText.delete(file.id);
+      }).catch((error: unknown) => {
         if (this.imageEpoch.get(file.id) !== epoch) return;
         this.imageErrors.add(file.id);
+        this.imageErrorText.set(file.id, this.imageFailureText(error));
       }).finally(() => {
         if (this.imageFlight.get(file.id) === epoch) this.imageFlight.delete(file.id);
         if (this.imageEpoch.get(file.id) === epoch) this.pushState();

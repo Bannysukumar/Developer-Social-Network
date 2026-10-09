@@ -176,6 +176,7 @@ describe("inline image messages", () => {
     await recipient.handleMessage({ version: 1, type: "reloadImage", messageId: "m-live", attachmentId: "att-1" });
     await wait();
     expect(recipient.snapshot().messages[0]?.attachments?.[0]?.loadError).toBe(true);
+    expect(recipient.snapshot().messages[0]?.attachments?.[0]?.loadDetail).toBe("Couldn't open this image.");
     expect(recipient.snapshot().messages[0]?.attachments?.[0]?.preview).toBeUndefined();
     expect(recipient.snapshot().error).toBeNull();
     const afterCorrupt = downloads;

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { z } from "zod";
 import { ApiClient } from "../src/api/client";
+import { ConversationsApi } from "../src/api/conversations";
 import { createApiConfig } from "../src/api/config";
 import { ApiError } from "../src/api/errors";
 
@@ -215,6 +216,26 @@ describe("central API client", () => {
     const downloadHeaders = new Headers(upload?.headers);
     expect(downloadHeaders.get("accept")).toBe("application/octet-stream");
     expect(downloadHeaders.get("authorization")).toBe("Bearer access-token");
+  });
+
+  test("retries an attachment upload as multipart when raw bytes are rejected", async () => {
+    const ciphertext = Uint8Array.from([1, 2, 3, 4]);
+    const types: string[] = [];
+    const client = new ApiClient(config, {
+      fetcher: async (_input, init) => {
+        const headers = new Headers(init?.headers);
+        types.push(headers.get("content-type") ?? "multipart");
+        if (headers.get("content-type") === "application/octet-stream") {
+          return new Response("{}", { status: 415, headers: { "Content-Type": "application/json" } });
+        }
+        return jsonResponse({ success: true, message: "ok", data: { id: "att-1", size: 4 } }, 201);
+      },
+      getAccessToken: async () => "token",
+    });
+    const api = new ConversationsApi(client);
+    await expect(api.uploadAttachment("507f1f77bcf86cd799439011", ciphertext)).resolves.toEqual({ id: "att-1", size: 4 });
+    expect(types[0]).toBe("application/octet-stream");
+    expect(types[1]).not.toBe("application/octet-stream");
   });
 
   test("returns a normalized timeout when the fetcher honors abort", async () => {

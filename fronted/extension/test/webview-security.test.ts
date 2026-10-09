@@ -41,6 +41,12 @@ describe("Webview security shell", () => {
     expect(html).toContain("image-bubble");
     expect(html).toContain("file-card");
     expect(html).toContain("img-src vscode-webview://local data:");
+    expect(html).toContain("Photos and images");
+    expect(html).toContain("Documents and archives");
+    expect(html).toContain("Browse files");
+    expect(html).toContain("attach-menu");
+    expect(html).toContain("prefers-reduced-motion: no-preference");
+    expect(html).toContain("aria-label=\"Uploading\"");
     expect(html).not.toContain("View image");
     expect(html).not.toContain("No messages yet. Say hello.");
   });

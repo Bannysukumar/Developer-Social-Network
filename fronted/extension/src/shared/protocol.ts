@@ -212,6 +212,7 @@ export type WebviewMessage = z.infer<typeof webviewMessageSchema>;
 const displayMessageSchema = messageSchema.extend({
   displayText: z.string(),
   sendState: z.enum(["failed", "sending"]).optional(),
+  sendError: z.string().max(200).optional(),
   attachments: z.array(z.object({
     id: z.string(),
     name: z.string(),
@@ -221,6 +222,7 @@ const displayMessageSchema = messageSchema.extend({
     iv: z.string(),
     preview: z.string().optional(),
     loadError: z.boolean().optional(),
+    loadDetail: z.string().max(120).optional(),
   })).optional(),
 });
 
