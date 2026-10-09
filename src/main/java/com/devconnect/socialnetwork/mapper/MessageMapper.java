@@ -15,7 +15,7 @@ public class MessageMapper {
                 message.getConversationId(),
                 message.getSenderId(),
                 message.getRecipientId(),
-                cleared ? null : message.getCiphertext(),
+                cleared ? "" : message.getCiphertext(),
                 message.getMessageType(),
                 message.getStatus(),
                 message.getDeviceId(),

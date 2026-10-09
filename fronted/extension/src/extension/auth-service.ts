@@ -354,6 +354,14 @@ export class AuthService {
     return this.displayMessage(message);
   }
 
+  markConversationRead(conversationId: string): Promise<unknown> {
+    return this.conversationsApi.markConversationRead(conversationId);
+  }
+
+  deleteMessage(messageId: string, scope: "me" | "everyone"): Promise<DisplayMessage> {
+    return this.conversationsApi.deleteMessage(messageId, scope).then((message) => this.displayMessage(message));
+  }
+
   async loadNotifications(): Promise<{ items: NotificationDto[]; unreadCount: number }> {
     const list = await this.notificationsApi.list();
     return { items: [...list.page.items], unreadCount: list.unreadCount };
@@ -420,7 +428,7 @@ export class AuthService {
   }
 
   private readMessage(message: MessageDto): string {
-    if (message.deletedForEveryone) return "[deleted]";
+    if (message.deletedForEveryone) return "This message was deleted";
     const decrypted = decryptMessage(message.ciphertext, this.deviceKeys);
     if (decrypted !== undefined) return decrypted;
     if (isEncryptedEnvelope(message.ciphertext)) return "Encrypted message";

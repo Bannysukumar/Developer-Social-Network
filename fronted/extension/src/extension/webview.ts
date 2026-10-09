@@ -184,6 +184,12 @@ export function renderWebview(webview: Webview, state: HostState): string {
   .banner.error { color: var(--vscode-errorForeground); background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent); }
   .banner.notice { background: color-mix(in srgb, var(--vscode-focusBorder) 14%, transparent); }
   .msg { max-width: 78%; align-self: flex-start; padding: 8px 10px; border-radius: 10px; background: color-mix(in srgb, var(--vscode-foreground) 8%, transparent); white-space: pre-wrap; word-break: break-word; }
+  .msg.deleted { font-style: italic; }
+  .receipt { font-size: 11px; letter-spacing: -2px; opacity: .75; }
+  .receipt.read { color: var(--vscode-textLink-foreground); opacity: 1; }
+  .receipt.fail { color: var(--vscode-errorForeground); letter-spacing: 0; }
+  .msg-menu { display: flex; gap: 4px; margin-top: 4px; flex-wrap: wrap; }
+  @media (forced-colors: active) { .receipt.read { color: Highlight; } }
   .msg.mine { align-self: flex-end; margin-left: 0; background: color-mix(in srgb, var(--vscode-button-background) 28%, transparent); }
   .profile-head { display: grid; justify-items: center; text-align: center; gap: 4px; padding: 8px 0 4px; }
   .stats { display: flex; gap: 16px; justify-content: center; }
@@ -503,7 +509,7 @@ export function renderWebview(webview: Webview, state: HostState): string {
         <button class="btn quiet" type="button" data-settings="menu">Settings</button>
         <h1>About</h1>
         <p>DevConnect</p>
-        <p class="muted" id="about-version">Version 0.4.19</p>
+        <p class="muted" id="about-version">Version 0.4.20</p>
         <p class="muted">A developer network inside Visual Studio Code. Messages stay encrypted on your devices.</p>
       </div>
     </section>
@@ -535,8 +541,9 @@ export function renderWebview(webview: Webview, state: HostState): string {
   let friendTab = "friends";
   let seenPanelSeq = -1;
   let chatQuery = "";
-  let lastThreadId = "";
-  let lastMessageCount = 0;
+    let lastThreadId = "";
+    let lastMessageCount = 0;
+    let openMenuId = "";
   let heldNew = 0;
   let typingOn = false;
   let typingStopTimer = 0;
@@ -811,9 +818,24 @@ export function renderWebview(webview: Webview, state: HostState): string {
     list.innerHTML = ordered.length ? ordered.map((m) => {
       const mine = !!(state.user && m.senderId === state.user.id);
       const failed = m.sendState === "failed";
-      const status = failed ? "Failed" : m.sendState === "sending" ? "Sending" : m.status === "READ" ? "Read" : m.status === "DELIVERED" ? "Delivered" : "Sent";
+      const deleted = !!m.deletedForEveryone;
+      const receipt = !mine ? "" : failed
+        ? '<span class="receipt fail" role="img" aria-label="Failed to send">!</span>'
+        : m.sendState === "sending"
+          ? '<span class="receipt" role="img" aria-label="Sending">○</span>'
+          : m.status === "READ"
+            ? '<span class="receipt read" role="img" aria-label="Read">✓✓</span>'
+            : m.status === "DELIVERED"
+              ? '<span class="receipt" role="img" aria-label="Delivered">✓✓</span>'
+              : '<span class="receipt" role="img" aria-label="Sent">✓</span>';
       const retry = failed ? '<button class="btn" type="button" data-act="retry-message" data-text="' + esc(m.displayText) + '">Retry</button>' : "";
-      return '<div class="msg ' + (mine ? "mine" : "theirs") + (failed ? " failed" : "") + '">' + esc(m.displayText) + '<div class="msg-meta">' + esc(clock(m.createdAt)) + (mine ? " · " + status : "") + '</div>' + (failed ? '<div class="msg-meta">Message failed to send.</div>' + retry : "") + '</div>';
+      const actions = m.id && String(m.id).indexOf("local-") !== 0
+        ? '<button class="btn quiet icon-btn" type="button" data-act="message-menu" data-id="' + esc(m.id) + '" aria-label="Message actions">⋯</button>'
+        : "";
+      const menu = openMenuId === m.id
+        ? '<div class="msg-menu">' + (mine && !deleted ? '<button class="btn danger" type="button" data-act="delete-everyone" data-id="' + esc(m.id) + '">Delete for everyone</button>' : "") + '<button class="btn" type="button" data-act="delete-me" data-id="' + esc(m.id) + '">Delete for me</button></div>'
+        : "";
+      return '<div class="msg ' + (mine ? "mine" : "theirs") + (failed ? " failed" : "") + (deleted ? " deleted" : "") + '">' + esc(m.displayText) + '<div class="msg-meta">' + esc(clock(m.createdAt)) + receipt + actions + '</div>' + menu + (failed ? '<div class="msg-meta">Message failed to send.</div>' + retry : "") + '</div>';
     }).join("") : '<div class="chat-empty">' + avatarMarkup({ displayName: person.name, username: person.username }, "lg") + '<strong>You\\'re connected with ' + esc(person.name) + '</strong><span class="muted">Start the conversation by saying hello.</span></div>';
     if (nearBottom || ordered.length < 2) {
       list.scrollTop = list.scrollHeight;
@@ -971,6 +993,23 @@ export function renderWebview(webview: Webview, state: HostState): string {
     if (act === "open-chat") vscode.postMessage({ version: 1, type: "openConversation", conversationId: id });
     if (act === "open-note") vscode.postMessage({ version: 1, type: "openNotification", notificationId: id });
     if (act === "revoke") vscode.postMessage({ version: 1, type: "revokeDevice", deviceId: id });
+    if (act === "message-menu") {
+      openMenuId = openMenuId === id ? "" : id;
+      apply(state);
+      return;
+    }
+    if (act === "delete-me" || act === "delete-everyone") {
+      const everyone = act === "delete-everyone";
+      openMenuId = "";
+      ask(
+        everyone
+          ? "This message will be replaced with \\"This message was deleted\\" for all participants in this conversation."
+          : "This message will be hidden from your chat. The other person will still see it.",
+        everyone ? "Delete for everyone" : "Delete for me",
+        () => vscode.postMessage({ version: 1, type: "deleteMessage", messageId: id, scope: everyone ? "everyone" : "me" })
+      );
+      return;
+    }
     if (act === "retry-message") {
       const text = target.getAttribute("data-text") || "";
       if (state.activeConversationId && text.trim()) vscode.postMessage({ version: 1, type: "sendMessage", conversationId: state.activeConversationId, text });

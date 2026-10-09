@@ -175,6 +175,9 @@ public class MessageService {
         if (!message.getRecipientId().equals(userId)) {
             throw new ForbiddenException("Only the recipient can mark a message read");
         }
+        if (message.isDeletedForEveryone()) {
+            return messageMapper.toAck(message);
+        }
         if (message.getStatus() != MessageStatus.READ) {
             var now = clock.instant();
             if (message.getDeliveredAt() == null) {
@@ -187,6 +190,22 @@ public class MessageService {
         MessageAck ack = messageMapper.toAck(message);
         push("READ", ack, message.getSenderId());
         return ack;
+    }
+
+    public int markConversationRead(String userId, String conversationId) {
+        conversationService.requireMember(userId, conversationId);
+        Query query = Query.query(Criteria.where("conversationId").is(conversationId)
+                .and("recipientId").is(userId)
+                .and("deletedForEveryone").ne(true)
+                .and("deletedForUserIds").ne(userId)
+                .and("status").ne(MessageStatus.READ))
+                .limit(50);
+        int updated = 0;
+        for (MessageEntity message : mongoTemplate.find(query, MessageEntity.class)) {
+            markRead(userId, message.getId());
+            updated += 1;
+        }
+        return updated;
     }
 
     public MessageResponse delete(String userId, String messageId, DeletionScope scope) {
@@ -202,11 +221,20 @@ public class MessageService {
                 messageRepository.save(message);
             }
             MessageResponse response = messageMapper.toResponse(message);
+            push("MESSAGE", response, message.getSenderId());
             push("MESSAGE", response, message.getRecipientId());
             return response;
         }
-        message.getDeletedForUserIds().add(userId);
-        messageRepository.save(message);
+        if (message.getDeletedForUserIds() == null) {
+            message.setDeletedForUserIds(new java.util.LinkedHashSet<>());
+        }
+        if (message.getDeletedForUserIds().add(userId)) {
+            messageRepository.save(message);
+        }
+        push("MESSAGE_HIDDEN", java.util.Map.of(
+                "messageId", message.getId(),
+                "conversationId", message.getConversationId()
+        ), userId);
         return messageMapper.toResponse(message);
     }
 

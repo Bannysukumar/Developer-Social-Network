@@ -100,6 +100,7 @@ function installFetch(): { fetcher: typeof fetch; friends: boolean } {
       return ok({ items: [{ id: "c1", type: "ONE_TO_ONE", participantIds: ["u1", "u2"] }], page: 0, size: 20, totalElements: 1, totalPages: 1, hasNext: false });
     }
     if (path === "conversations/c1") return ok({ id: "c1", type: "ONE_TO_ONE", participantIds: ["u1", "u2"] });
+    if (path === "conversations/c1/read" && method === "POST") return ok({ updated: 0 });
     if (path === "conversations/c1/messages" && method === "GET") {
       return ok({ items: [], nextCursor: null, hasNext: false });
     }

@@ -163,9 +163,24 @@ export class SessionFlow {
       this.pushState();
       return;
     }
+    if (frame.type === "MESSAGE_HIDDEN") {
+      const data = frame.data;
+      const messageId = data && typeof data === "object" && "messageId" in data ? (data as { messageId?: unknown }).messageId : undefined;
+      const conversationId = data && typeof data === "object" && "conversationId" in data ? (data as { conversationId?: unknown }).conversationId : undefined;
+      if (typeof messageId === "string") {
+        this.messages = this.messages.filter((item) => item.id !== messageId);
+        if (typeof conversationId === "string" && this.conversationPreviews[conversationId]) {
+          const newest = this.messages.find((item) => item.conversationId === conversationId);
+          if (newest) this.rememberPreview(conversationId, newest.displayText);
+        }
+        this.pushState();
+      }
+      return;
+    }
     const message = messageFromFrame(frame);
     if (message) {
-      if (this.seenMessageIds.has(message.id)) return;
+      const alreadySeen = this.seenMessageIds.has(message.id);
+      if (alreadySeen && !message.deletedForEveryone) return;
       this.seenMessageIds.add(message.id);
       const patch = mergeLiveMessage(
         this.messages,
@@ -312,6 +327,7 @@ export class SessionFlow {
         this.messages = opened.messages;
         this.rememberPreview(opened.conversation.id, opened.messages[0]?.displayText);
         for (const item of opened.messages) this.seenMessageIds.add(item.id);
+        void this.auth.markConversationRead(opened.conversation.id).catch(() => undefined);
         await this.syncMessageLock(opened.conversation.participantIds);
         this.show("messages", false);
         return;
@@ -453,6 +469,7 @@ export class SessionFlow {
       this.messages = opened.messages;
       this.rememberPreview(opened.conversation.id, opened.messages[0]?.displayText);
       for (const item of opened.messages) this.seenMessageIds.add(item.id);
+      void this.auth.markConversationRead(opened.conversation.id).catch(() => undefined);
       delete this.unreadByConversation[opened.conversation.id];
       this.unreadMessages = Object.values(this.unreadByConversation).reduce((sum, count) => sum + count, 0);
       this.conversations = await this.auth.listConversations();
@@ -646,10 +663,20 @@ export class SessionFlow {
           this.rememberPreview(opened.conversation.id, opened.messages[0]?.displayText);
           for (const item of opened.messages) this.seenMessageIds.add(item.id);
           delete this.unreadByConversation[opened.conversation.id];
+          void this.auth.markConversationRead(opened.conversation.id).catch(() => undefined);
           this.unreadMessages = Object.values(this.unreadByConversation).reduce((sum, count) => sum + count, 0);
           this.conversations = await this.auth.listConversations();
           await this.syncMessageLock(opened.conversation.participantIds);
           this.show("messages", this.screen !== "messages");
+          break;
+        }
+        case "deleteMessage": {
+          const updated = await this.auth.deleteMessage(message.messageId, message.scope);
+          if (message.scope === "me") {
+            this.messages = this.messages.filter((item) => item.id !== message.messageId);
+          } else {
+            this.messages = this.messages.map((item) => item.id === message.messageId ? updated : item);
+          }
           break;
         }
         case "sendMessage": {
@@ -734,6 +761,7 @@ export class SessionFlow {
             this.messages = opened.messages;
             this.rememberPreview(opened.conversation.id, opened.messages[0]?.displayText);
             for (const item of opened.messages) this.seenMessageIds.add(item.id);
+        void this.auth.markConversationRead(opened.conversation.id).catch(() => undefined);
             delete this.unreadByConversation[opened.conversation.id];
             this.unreadMessages = Object.values(this.unreadByConversation).reduce((sum, count) => sum + count, 0);
             await this.syncMessageLock(opened.conversation.participantIds);

@@ -73,6 +73,15 @@ public class ConversationController {
         return ApiResponses.ok("Messages retrieved", messageService.list(SecurityUtils.currentUserId(), conversationId, cursor, limit));
     }
 
+    @PostMapping("/{conversationId}/read")
+    @Operation(summary = "Mark the caller's unread incoming messages in this conversation as read")
+    public ResponseEntity<ApiResponse<com.devconnect.socialnetwork.dto.response.CountResponse>> read(
+            @PathVariable String conversationId
+    ) {
+        int updated = messageService.markConversationRead(SecurityUtils.currentUserId(), conversationId);
+        return ApiResponses.ok("Messages marked read", new com.devconnect.socialnetwork.dto.response.CountResponse(updated));
+    }
+
     @PostMapping("/{conversationId}/messages")
     @Operation(summary = "Store a client-encrypted message")
     public ResponseEntity<ApiResponse<MessageResponse>> send(

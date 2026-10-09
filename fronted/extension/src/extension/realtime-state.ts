@@ -37,11 +37,20 @@ export function mergeLiveMessage(
 ): LivePatch {
   if (incoming.conversationId === activeConversationId) {
     const withoutLocal = withoutLocalSending(messages, incoming, selfId);
-    if (withoutLocal.some((item) => item.id === incoming.id)) {
-      return withoutLocal.length === messages.length ? { refresh: null } : { messages: withoutLocal, refresh: null };
+    const current = withoutLocal.find((item) => item.id === incoming.id);
+    if (current) {
+      const changed = current.deletedForEveryone !== incoming.deletedForEveryone
+        || current.ciphertext !== incoming.ciphertext
+        || current.status !== incoming.status;
+      if (!changed && withoutLocal.length === messages.length) return { refresh: null };
+      return {
+        messages: withoutLocal.map((item) => item.id === incoming.id ? { ...incoming } : item),
+        refresh: null,
+      };
     }
     return { messages: [incoming, ...withoutLocal], refresh: null };
   }
+  if (incoming.deletedForEveryone) return { refresh: null };
   const fromOther = incoming.senderId !== selfId;
   return {
     bumpConversation: fromOther ? incoming.conversationId : undefined,

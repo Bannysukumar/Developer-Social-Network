@@ -135,6 +135,12 @@ export const webviewMessageSchema = z.discriminatedUnion("type", [
     conversationId: z.string().min(1),
     text: z.string().min(1).max(4000),
   }).strict(),
+  z.object({
+    version: z.literal(1),
+    type: z.literal("deleteMessage"),
+    messageId: z.string().min(1),
+    scope: z.enum(["me", "everyone"]),
+  }).strict(),
   z.object({ version: z.literal(1), type: z.literal("loadNotifications") }).strict(),
   z.object({
     version: z.literal(1),

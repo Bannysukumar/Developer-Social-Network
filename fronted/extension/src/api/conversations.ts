@@ -77,12 +77,16 @@ export class ConversationsApi {
     );
   }
 
+  markConversationRead(conversationId: string): Promise<unknown> {
+    return this.client.request(`conversations/${pathId(conversationId)}/read`, undefined, { method: "POST" });
+  }
+
   markRead(messageId: string): Promise<unknown> {
     return this.client.request(`messages/${pathId(messageId)}/read`, undefined, { method: "PATCH" });
   }
 
-  deleteMessage(messageId: string, scope: "me" | "everyone" = "me"): Promise<unknown> {
-    return this.client.request(`messages/${pathId(messageId)}`, undefined, {
+  deleteMessage(messageId: string, scope: "me" | "everyone" = "me"): Promise<MessageDto> {
+    return this.client.request(`messages/${pathId(messageId)}`, messageSchema, {
       method: "DELETE",
       query: { scope },
     });

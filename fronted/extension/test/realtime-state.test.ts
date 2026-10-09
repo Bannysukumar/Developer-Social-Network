@@ -38,6 +38,16 @@ describe("realtime state", () => {
     expect(again.messages).toBeUndefined();
   });
 
+  test("replaces a message with the deletion tombstone and ignores a repeat", () => {
+    const first = mergeLiveMessage([], message, "c1", "ada", 0);
+    const tombstone = { ...message, ciphertext: "", deletedForEveryone: true };
+    const updated = mergeLiveMessage(first.messages ?? [], tombstone, "c1", "ada", 0);
+    expect(updated.messages?.[0]?.deletedForEveryone).toBe(true);
+    expect(updated.messages?.[0]?.ciphertext).toBe("");
+    const again = mergeLiveMessage(updated.messages ?? [], tombstone, "c1", "ada", 0);
+    expect(again.messages).toBeUndefined();
+  });
+
   test("counts a message that arrived in another conversation", () => {
     const patch = mergeLiveMessage([], message, null, "ada", 0);
     expect(patch.bumpConversation).toBe("c1");
@@ -69,5 +79,9 @@ describe("realtime state", () => {
     expect(next.notifications.map((item) => item.read)).toEqual([true, false]);
     expect(next.unreadCount).toBe(1);
     expect(applyNotificationRead(next.notifications, next.unreadCount, { ...notes[0], read: true }).unreadCount).toBe(1);
+  });
+
+  test("accepts a hide-message frame", () => {
+    expect(parseServerFrame('{"type":"MESSAGE_HIDDEN","data":{"messageId":"m1","conversationId":"c1"}}')?.type).toBe("MESSAGE_HIDDEN");
   });
 });
