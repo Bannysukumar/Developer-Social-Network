@@ -170,6 +170,7 @@ class DevConnectHost implements vscode.WebviewViewProvider, vscode.Disposable {
   ): Promise<void> {
     const prefs = readNoticePrefs();
     const message = messageFromFrame(frame);
+    if (message?.deletedForEveryone || frame.type === "MESSAGE_DELETED" || frame.type === "MESSAGE_HIDDEN") return;
     const selfId = this.auth.getUser()?.id;
     const noticeSlot = message ? { conversationId: message.conversationId, notificationId: unreadMessageNotificationId(this.flow.snapshot().notifications, message.conversationId) } : undefined;
     if (noticeSlot) this.openNotices.push(noticeSlot);

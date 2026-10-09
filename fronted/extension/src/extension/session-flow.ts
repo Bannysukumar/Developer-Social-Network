@@ -6,7 +6,7 @@ import type { AuthService } from "./auth-service";
 import { messageFromFrame, notificationFromFrame, presenceFromFrame, typingFromFrame, type ServerFrame, type SocketStatus } from "./chat-socket";
 import { unreadMessageNotificationId } from "./desktop-notice";
 import { mergePresence } from "./presence-state";
-import { applyNotificationRead, mergeLiveMessage, mergeNotification, mergeReceipt } from "./realtime-state";
+import { applyNotificationRead, applyTombstone, mergeHistory, mergeLiveMessage, mergeNotification, mergeReceipt } from "./realtime-state";
 import { emptyHostState, type HostState } from "./webview";
 
 export class SessionFlow {
@@ -46,6 +46,8 @@ export class SessionFlow {
   private presenceByUser: Record<string, { status: "ONLINE" | "OFFLINE"; lastSeenAt?: string | null }> = {};
   private typing: HostState["typing"] = null;
   private typingTimer: ReturnType<typeof setTimeout> | undefined;
+  private readInflight = new Set<string>();
+  private readAgain = new Set<string>();
   constructor(
     private readonly auth: AuthService,
     private readonly onChange: () => void,
@@ -163,6 +165,18 @@ export class SessionFlow {
       this.pushState();
       return;
     }
+    if (frame.type === "MESSAGE_DELETED") {
+      const data = frame.data;
+      const messageId = data && typeof data === "object" && "messageId" in data ? (data as { messageId?: unknown }).messageId : undefined;
+      if (typeof messageId === "string") {
+        const next = applyTombstone(this.messages, messageId);
+        if (next) {
+          this.messages = next.map((item) => this.auth.displayMessage(item));
+          this.pushState();
+        }
+      }
+      return;
+    }
     if (frame.type === "MESSAGE_HIDDEN") {
       const data = frame.data;
       const messageId = data && typeof data === "object" && "messageId" in data ? (data as { messageId?: unknown }).messageId : undefined;
@@ -200,6 +214,15 @@ export class SessionFlow {
         this.toastSeq = patch.toastSeq ?? this.toastSeq;
       }
       if (patch.refresh === "conversations") void this.refreshConversationsQuiet();
+      const selfId = this.auth.getUser()?.id;
+      if (
+        this.screen === "messages"
+        && message.conversationId === this.activeConversationId
+        && message.senderId !== selfId
+        && !message.deletedForEveryone
+      ) {
+        this.scheduleConversationRead(message.conversationId);
+      }
       this.pushState();
       return;
     }
@@ -324,10 +347,11 @@ export class SessionFlow {
       try {
         const opened = await this.auth.openConversation({ conversationId: route.conversationId });
         this.activeConversationId = opened.conversation.id;
-        this.messages = opened.messages;
+        this.messages = mergeHistory(this.messages, opened.messages);
+        this.pushState();
         this.rememberPreview(opened.conversation.id, opened.messages[0]?.displayText);
         for (const item of opened.messages) this.seenMessageIds.add(item.id);
-        void this.auth.markConversationRead(opened.conversation.id).catch(() => undefined);
+        this.scheduleConversationRead(opened.conversation.id);
         await this.syncMessageLock(opened.conversation.participantIds);
         this.show("messages", false);
         return;
@@ -466,10 +490,11 @@ export class SessionFlow {
     if (target.conversationId) {
       const opened = await this.auth.openConversation({ conversationId: target.conversationId });
       this.activeConversationId = opened.conversation.id;
-      this.messages = opened.messages;
+      this.messages = mergeHistory(this.messages, opened.messages);
+        this.pushState();
       this.rememberPreview(opened.conversation.id, opened.messages[0]?.displayText);
       for (const item of opened.messages) this.seenMessageIds.add(item.id);
-      void this.auth.markConversationRead(opened.conversation.id).catch(() => undefined);
+      this.scheduleConversationRead(opened.conversation.id);
       delete this.unreadByConversation[opened.conversation.id];
       this.unreadMessages = Object.values(this.unreadByConversation).reduce((sum, count) => sum + count, 0);
       this.conversations = await this.auth.listConversations();
@@ -659,11 +684,12 @@ export class SessionFlow {
             participantId: message.participantId,
           });
           this.activeConversationId = opened.conversation.id;
-          this.messages = opened.messages;
+          this.messages = mergeHistory(this.messages, opened.messages);
+        this.pushState();
           this.rememberPreview(opened.conversation.id, opened.messages[0]?.displayText);
           for (const item of opened.messages) this.seenMessageIds.add(item.id);
           delete this.unreadByConversation[opened.conversation.id];
-          void this.auth.markConversationRead(opened.conversation.id).catch(() => undefined);
+          this.scheduleConversationRead(opened.conversation.id);
           this.unreadMessages = Object.values(this.unreadByConversation).reduce((sum, count) => sum + count, 0);
           this.conversations = await this.auth.listConversations();
           await this.syncMessageLock(opened.conversation.participantIds);
@@ -677,6 +703,7 @@ export class SessionFlow {
           } else {
             this.messages = this.messages.map((item) => item.id === message.messageId ? updated : item);
           }
+          this.pushState();
           break;
         }
         case "sendMessage": {
@@ -758,10 +785,11 @@ export class SessionFlow {
           if (note?.type === "NEW_MESSAGE" && note.referenceId) {
             const opened = await this.auth.openConversation({ conversationId: note.referenceId });
             this.activeConversationId = opened.conversation.id;
-            this.messages = opened.messages;
+            this.messages = mergeHistory(this.messages, opened.messages);
+        this.pushState();
             this.rememberPreview(opened.conversation.id, opened.messages[0]?.displayText);
             for (const item of opened.messages) this.seenMessageIds.add(item.id);
-        void this.auth.markConversationRead(opened.conversation.id).catch(() => undefined);
+        this.scheduleConversationRead(opened.conversation.id);
             delete this.unreadByConversation[opened.conversation.id];
             this.unreadMessages = Object.values(this.unreadByConversation).reduce((sum, count) => sum + count, 0);
             await this.syncMessageLock(opened.conversation.participantIds);
@@ -824,8 +852,8 @@ export class SessionFlow {
       }
     } finally {
       this.busy = false;
-      if (this.auth.isAuthenticated()) await this.warmAvatars();
       this.pushState();
+      if (this.auth.isAuthenticated()) void this.warmAvatars().then(() => this.pushState());
     }
   }
 
@@ -841,6 +869,19 @@ export class SessionFlow {
   private rememberPreview(conversationId: string, text: string | undefined): void {
     const preview = text?.trim();
     if (preview) this.conversationPreviews[conversationId] = preview;
+  }
+
+  private scheduleConversationRead(conversationId: string): void {
+    if (this.readInflight.has(conversationId)) {
+      this.readAgain.add(conversationId);
+      return;
+    }
+    this.readInflight.add(conversationId);
+    void this.auth.markConversationRead(conversationId).catch(() => undefined).finally(() => {
+      this.readInflight.delete(conversationId);
+      if (!this.readAgain.delete(conversationId)) return;
+      this.scheduleConversationRead(conversationId);
+    });
   }
 
   private peerId(participantIds?: readonly string[]): string | undefined {

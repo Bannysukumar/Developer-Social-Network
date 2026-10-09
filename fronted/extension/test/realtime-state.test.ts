@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { notificationFromFrame, parseServerFrame } from "../src/extension/chat-socket";
-import { applyNotificationRead, mergeLiveMessage, mergeNotification, retryDelayMs } from "../src/extension/realtime-state";
+import { applyNotificationRead, applyTombstone, mergeHistory, mergeLiveMessage, mergeNotification, mergeReceipt, retryDelayMs } from "../src/extension/realtime-state";
 
 const message = {
   id: "m1",
@@ -81,7 +81,34 @@ describe("realtime state", () => {
     expect(applyNotificationRead(next.notifications, next.unreadCount, { ...notes[0], read: true }).unreadCount).toBe(1);
   });
 
+  test("applies a deletion immediately and ignores a late copy of the ciphertext", () => {
+    const first = mergeLiveMessage([], message, "c1", "ada", 0);
+    const hidden = applyTombstone(first.messages ?? [], "m1");
+    expect(hidden?.[0]?.displayText).toBe("This message was deleted");
+    const stale = mergeLiveMessage(hidden ?? [], message, "c1", "ada", 0);
+    expect(stale.messages).toBeUndefined();
+    expect(applyTombstone(hidden ?? [], "m1")).toBeUndefined();
+  });
+
+  test("a late delivered receipt cannot overwrite read", () => {
+    const read = [{ ...message, status: "READ" as const }];
+    expect(mergeReceipt(read, { type: "DELIVERED", data: { messageId: "m1" } })).toBeUndefined();
+    expect(mergeReceipt([{ ...message, status: "DELIVERED" }], { type: "READ", data: { messageId: "m1" } })?.[0]?.status).toBe("READ");
+  });
+
+  test("a stale history response cannot restore deleted text or lower a read receipt", () => {
+    const current = [{ ...message, status: "READ" as const, ciphertext: "", deletedForEveryone: true, displayText: "This message was deleted" }];
+    const fetched = [{ ...message, status: "DELIVERED" as const, ciphertext: "still-there" }];
+    const merged = mergeHistory(current, fetched);
+    expect(merged[0]?.deletedForEveryone).toBe(true);
+    expect(merged[0]?.ciphertext).toBe("");
+    expect(merged[0]?.displayText).toBe("This message was deleted");
+    const receipt = mergeHistory([{ ...message, status: "READ" }], [{ ...message, status: "SENT" }]);
+    expect(receipt[0]?.status).toBe("READ");
+  });
+
   test("accepts a hide-message frame", () => {
     expect(parseServerFrame('{"type":"MESSAGE_HIDDEN","data":{"messageId":"m1","conversationId":"c1"}}')?.type).toBe("MESSAGE_HIDDEN");
+    expect(parseServerFrame('{"type":"MESSAGE_DELETED","data":{"messageId":"m1","conversationId":"c1","deletedAt":"2026-10-09T12:00:00Z"}}')?.type).toBe("MESSAGE_DELETED");
   });
 });

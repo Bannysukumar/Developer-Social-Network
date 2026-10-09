@@ -39,6 +39,7 @@ export function mergeLiveMessage(
     const withoutLocal = withoutLocalSending(messages, incoming, selfId);
     const current = withoutLocal.find((item) => item.id === incoming.id);
     if (current) {
+      if (current.deletedForEveryone && !incoming.deletedForEveryone) return { refresh: null };
       const changed = current.deletedForEveryone !== incoming.deletedForEveryone
         || current.ciphertext !== incoming.ciphertext
         || current.status !== incoming.status;
@@ -58,6 +59,34 @@ export function mergeLiveMessage(
     toastSeq: fromOther ? toastSeq + 1 : toastSeq,
     refresh: "conversations",
   };
+}
+
+const statusRank = { SENT: 0, DELIVERED: 1, READ: 2 } as const;
+
+export function applyTombstone<T extends { id: string; ciphertext?: string | null; deletedForEveryone?: boolean; displayText?: string }>(
+  messages: readonly T[],
+  messageId: string,
+): T[] | undefined {
+  let changed = false;
+  const next = messages.map((message) => {
+    if (message.id !== messageId || message.deletedForEveryone) return message;
+    changed = true;
+    return { ...message, ciphertext: "", deletedForEveryone: true, displayText: "This message was deleted" };
+  });
+  return changed ? next : undefined;
+}
+
+export function mergeHistory<T extends MessageDto & { displayText?: string }>(current: readonly T[], fetched: readonly T[]): T[] {
+  const previous = new Map(current.map((item) => [item.id, item]));
+  return fetched.map((item) => {
+    const existing = previous.get(item.id);
+    if (!existing) return item;
+    if (existing.deletedForEveryone || item.deletedForEveryone) {
+      return { ...item, ciphertext: "", deletedForEveryone: true, displayText: "This message was deleted" };
+    }
+    const kept = (statusRank[existing.status] ?? 0) > (statusRank[item.status] ?? 0) ? existing.status : item.status;
+    return kept === item.status ? item : { ...item, status: kept };
+  });
 }
 
 export function mergeReceipt(messages: readonly MessageDto[], frame: ServerFrame): MessageDto[] | undefined {

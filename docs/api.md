@@ -135,7 +135,7 @@ Only friends can open a conversation. Users cannot friend or message across a bl
 
 `POST /api/v1/conversations/{conversationId}/read` marks up to 50 of the caller's unread incoming messages in that conversation and emits one `READ` frame per message.
 
-`DELETE /api/v1/messages/{messageId}?scope=me` hides the message for the caller and emits `MESSAGE_HIDDEN` to that caller's sockets. `scope=everyone` is sender-only, has no time limit, clears the stored ciphertext, keeps the message id for ordering, and emits `MESSAGE` with `deletedForEveryone: true` and empty ciphertext to both participants after the write succeeds. Clients show "This message was deleted". Copies already decrypted outside DevConnect are not erased.
+`DELETE /api/v1/messages/{messageId}?scope=me` hides the message for the caller and emits `MESSAGE_HIDDEN` to that caller's sockets. `scope=everyone` is sender-only, has no time limit, clears the stored ciphertext, keeps the message id for ordering, and after the write succeeds emits `MESSAGE_DELETED` (`messageId`, `conversationId`, `deletedAt`) plus `MESSAGE` with `deletedForEveryone: true` and empty ciphertext to both participants. Socket writes are queued per connection so one slow window cannot delay another. Clients show "This message was deleted". Copies already decrypted outside DevConnect are not erased.
 
 ## Notifications
 

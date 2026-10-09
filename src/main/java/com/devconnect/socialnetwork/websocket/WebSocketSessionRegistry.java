@@ -6,6 +6,8 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 
+import jakarta.annotation.PreDestroy;
+
 import java.io.IOException;
 import java.time.Duration;
 import java.time.Instant;
@@ -13,6 +15,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 @Component
 public class WebSocketSessionRegistry {
@@ -21,6 +25,11 @@ public class WebSocketSessionRegistry {
 
     private final ConcurrentHashMap<String, Set<WebSocketSession>> sessions = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, Instant> lastActivity = new ConcurrentHashMap<>();
+    private final ExecutorService writers = Executors.newCachedThreadPool(runnable -> {
+        Thread thread = new Thread(runnable, "devconnect-ws");
+        thread.setDaemon(true);
+        return thread;
+    });
 
     public void add(String userId, WebSocketSession session) {
         sessions.computeIfAbsent(userId, ignored -> ConcurrentHashMap.newKeySet()).add(session);
@@ -69,21 +78,44 @@ public class WebSocketSessionRegistry {
         return userSessions != null && userSessions.stream().anyMatch(WebSocketSession::isOpen);
     }
 
+    /**
+     * Queue one write per open socket. A slow or half-open socket must not delay delivery to another window.
+     */
     public void send(String userId, String json) {
         Set<WebSocketSession> userSessions = sessions.get(userId);
         if (userSessions == null) {
             return;
         }
-        for (WebSocketSession session : userSessions) {
+        for (WebSocketSession session : List.copyOf(userSessions)) {
             if (!session.isOpen()) {
                 continue;
             }
-            try {
-                synchronized (session) {
+            writers.execute(() -> write(userId, session, json));
+        }
+    }
+
+    @PreDestroy
+    public void close() {
+        writers.shutdownNow();
+    }
+
+    private void write(String userId, WebSocketSession session, String json) {
+        if (!session.isOpen()) {
+            return;
+        }
+        try {
+            synchronized (session) {
+                if (session.isOpen()) {
                     session.sendMessage(new TextMessage(json));
                 }
-            } catch (IOException ex) {
-                log.warn("WebSocket delivery failed userId={}", userId);
+            }
+        } catch (Exception ex) {
+            log.warn("WebSocket delivery failed userId={} sessionId={}", userId, session.getId());
+            remove(userId, session);
+            try {
+                session.close();
+            } catch (IOException ignored) {
+                // The failed socket is already unusable.
             }
         }
     }

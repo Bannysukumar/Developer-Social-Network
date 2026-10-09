@@ -429,10 +429,11 @@ export class AuthService {
 
   private readMessage(message: MessageDto): string {
     if (message.deletedForEveryone) return "This message was deleted";
-    const decrypted = decryptMessage(message.ciphertext, this.deviceKeys);
+    const ciphertext = message.ciphertext ?? "";
+    const decrypted = decryptMessage(ciphertext, this.deviceKeys);
     if (decrypted !== undefined) return decrypted;
-    if (isEncryptedEnvelope(message.ciphertext)) return "Encrypted message";
-    return decodeOpaqueText(message.ciphertext);
+    if (isEncryptedEnvelope(ciphertext)) return "Encrypted message";
+    return decodeOpaqueText(ciphertext);
   }
 
   private pickRecipients(devices: readonly {

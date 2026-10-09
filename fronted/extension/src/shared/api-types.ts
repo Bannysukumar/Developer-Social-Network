@@ -140,7 +140,7 @@ export const messageSchema = z.object({
   conversationId: z.string().min(1),
   senderId: z.string().min(1),
   recipientId: z.string().min(1),
-  ciphertext: z.string(),
+  ciphertext: z.string().nullable().optional(),
   messageType: z.enum(["TEXT", "IMAGE", "FILE", "SYSTEM"]),
   status: z.enum(["SENT", "DELIVERED", "READ"]),
   deviceId: z.string().nullable().optional(),

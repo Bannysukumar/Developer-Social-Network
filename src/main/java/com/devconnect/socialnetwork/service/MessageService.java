@@ -27,6 +27,7 @@ import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.stereotype.Service;
 
 import java.time.Clock;
@@ -193,6 +194,7 @@ public class MessageService {
     }
 
     public int markConversationRead(String userId, String conversationId) {
+        long started = System.nanoTime();
         conversationService.requireMember(userId, conversationId);
         Query query = Query.query(Criteria.where("conversationId").is(conversationId)
                 .and("recipientId").is(userId)
@@ -200,12 +202,39 @@ public class MessageService {
                 .and("deletedForUserIds").ne(userId)
                 .and("status").ne(MessageStatus.READ))
                 .limit(50);
-        int updated = 0;
-        for (MessageEntity message : mongoTemplate.find(query, MessageEntity.class)) {
-            markRead(userId, message.getId());
-            updated += 1;
+        List<MessageEntity> messages = mongoTemplate.find(query, MessageEntity.class);
+        if (messages.isEmpty()) {
+            return 0;
         }
-        return updated;
+        var now = clock.instant();
+        List<String> ids = messages.stream().map(MessageEntity::getId).toList();
+        mongoTemplate.updateMulti(
+                Query.query(Criteria.where("_id").in(ids).and("status").ne(MessageStatus.READ)),
+                new Update().set("status", MessageStatus.READ).set("readAt", now),
+                MessageEntity.class
+        );
+        mongoTemplate.updateMulti(
+                Query.query(Criteria.where("_id").in(ids).and("deliveredAt").is(null)),
+                new Update().set("deliveredAt", now),
+                MessageEntity.class
+        );
+        long persisted = System.nanoTime();
+        for (MessageEntity message : messages) {
+            if (message.getDeliveredAt() == null) {
+                message.setDeliveredAt(now);
+            }
+            message.setStatus(MessageStatus.READ);
+            message.setReadAt(now);
+            push("READ", messageMapper.toAck(message), message.getSenderId());
+        }
+        log.info(
+                "Read receipts stored conversationId={} count={} persistMs={} publishScheduledMs={}",
+                conversationId,
+                messages.size(),
+                millis(started, persisted),
+                millis(persisted, System.nanoTime())
+        );
+        return messages.size();
     }
 
     public MessageResponse delete(String userId, String messageId, DeletionScope scope) {
@@ -215,14 +244,30 @@ public class MessageService {
             if (!message.getSenderId().equals(userId)) {
                 throw new ForbiddenException("Only the sender can delete a message for everyone");
             }
+            long started = System.nanoTime();
             if (!message.isDeletedForEveryone()) {
                 message.setDeletedForEveryone(true);
                 message.setCiphertext("");
                 messageRepository.save(message);
             }
+            long persisted = System.nanoTime();
             MessageResponse response = messageMapper.toResponse(message);
-            push("MESSAGE", response, message.getSenderId());
+            java.util.Map<String, String> tombstone = java.util.Map.of(
+                    "messageId", message.getId(),
+                    "conversationId", message.getConversationId(),
+                    "deletedAt", clock.instant().toString()
+            );
+            push("MESSAGE_DELETED", tombstone, message.getRecipientId());
+            push("MESSAGE_DELETED", tombstone, message.getSenderId());
             push("MESSAGE", response, message.getRecipientId());
+            push("MESSAGE", response, message.getSenderId());
+            log.info(
+                    "Message deleted for everyone messageId={} conversationId={} persistMs={} publishScheduledMs={}",
+                    message.getId(),
+                    message.getConversationId(),
+                    millis(started, persisted),
+                    millis(persisted, System.nanoTime())
+            );
             return response;
         }
         if (message.getDeletedForUserIds() == null) {
@@ -285,6 +330,10 @@ public class MessageService {
         } catch (Exception ex) {
             log.warn("Realtime frame was not sent type={} userId={}", type, userId);
         }
+    }
+
+    private static long millis(long startedNanos, long endedNanos) {
+        return (endedNanos - startedNanos) / 1_000_000L;
     }
 
     private String blankToNull(String value) {

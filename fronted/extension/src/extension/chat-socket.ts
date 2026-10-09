@@ -4,7 +4,7 @@ import { messageSchema, notificationSchema, type MessageDto, type NotificationDt
 import { retryDelayMs } from "./realtime-state";
 
 const serverFrameSchema = z.object({
-  type: z.enum(["READY", "MESSAGE", "DELIVERED", "READ", "PONG", "ERROR", "NOTIFICATION", "PRESENCE_UPDATE", "TYPING_START", "TYPING_STOP", "MESSAGE_HIDDEN"]),
+  type: z.enum(["READY", "MESSAGE", "DELIVERED", "READ", "PONG", "ERROR", "NOTIFICATION", "PRESENCE_UPDATE", "TYPING_START", "TYPING_STOP", "MESSAGE_HIDDEN", "MESSAGE_DELETED"]),
   data: z.unknown().optional(),
 }).passthrough();
 
