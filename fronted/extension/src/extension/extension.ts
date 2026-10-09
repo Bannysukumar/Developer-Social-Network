@@ -1,9 +1,12 @@
+import { mkdirSync, writeFileSync } from "fs";
+import { join } from "path";
 import * as vscode from "vscode";
 import { createApiConfig } from "../api/config";
 import type { ScreenId } from "../shared/flow";
 import { AuthService } from "./auth-service";
 import { chatSocketUrl, messageFromFrame, NodeChatSocket, notificationFromFrame } from "./chat-socket";
-import { decideMessageNotice, decideNotificationNotice, unreadMessageNotificationId, type NoticePrefs } from "./desktop-notice";
+import { decideMessageNotice, decideNotificationNotice, decideStoredNotice, isActivelyReading, noticeLaunchUri, unreadMessageNotificationId, type NoticePrefs, type NoticeTarget } from "./desktop-notice";
+import { showBackgroundNotice } from "./os-notice";
 import { SessionFlow } from "./session-flow";
 import { createStateMessage, renderWebview } from "./webview";
 
@@ -19,7 +22,12 @@ class DevConnectHost implements vscode.WebviewViewProvider, vscode.Disposable {
   private openingNotice = false;
   private readonly statusBar: vscode.StatusBarItem;
 
-  constructor(private readonly auth: AuthService) {
+  constructor(
+    private readonly auth: AuthService,
+    private readonly noticeDir: string | undefined,
+    private readonly toastScript: string,
+    private readonly output: vscode.OutputChannel,
+  ) {
     this.statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 0);
     this.statusBar.command = "devconnect.open";
     this.flow = new SessionFlow(auth, () => {
@@ -66,6 +74,28 @@ class DevConnectHost implements vscode.WebviewViewProvider, vscode.Disposable {
     this.flow.setNotices(readNoticePrefs());
     this.socketToken = undefined;
     void this.syncChat();
+  }
+
+  openFromNotice(uri: vscode.Uri): void {
+    if (uri.path !== "/notice") return;
+    const params = new URLSearchParams(uri.query);
+    const screen = params.get("screen");
+    if (screen !== "messages" && screen !== "friends" && screen !== "user" && screen !== "notifications") return;
+    if (this.openingNotice) return;
+    this.openingNotice = true;
+    this.pending = {
+      screen,
+      conversationId: params.get("conversationId") ?? undefined,
+      notificationId: params.get("notificationId") ?? undefined,
+      userId: params.get("userId") ?? undefined,
+      friendsPanel: params.get("friendsPanel") === "requests" ? "requests" : undefined,
+    };
+    this.output.appendLine(`notice click screen=${screen}`);
+    void Promise.resolve(vscode.commands.executeCommand("workbench.view.extension.devconnect"))
+      .then(() => this.consumePending())
+      .finally(() => {
+        this.openingNotice = false;
+      });
   }
 
   async open(target?: { screen: ScreenId; conversationId?: string }): Promise<void> {
@@ -122,7 +152,10 @@ class DevConnectHost implements vscode.WebviewViewProvider, vscode.Disposable {
           before.conversations,
         );
       },
-      onStatus: (status, recovered) => this.flow.setConnection(status, recovered),
+      onStatus: (status, recovered) => {
+        this.flow.setConnection(status, recovered);
+        if (status === "connected" && recovered) void this.recoverMissedNotices();
+      },
       onAuthLost: () => {
         this.socketToken = undefined;
         this.flow.sessionExpired();
@@ -136,7 +169,6 @@ class DevConnectHost implements vscode.WebviewViewProvider, vscode.Disposable {
     conversations: readonly { id: string; peerDisplayName?: string; peerUsername?: string }[],
   ): Promise<void> {
     const prefs = readNoticePrefs();
-    const viewing = this.view?.visible === true;
     const message = messageFromFrame(frame);
     const selfId = this.auth.getUser()?.id;
     const noticeSlot = message ? { conversationId: message.conversationId, notificationId: unreadMessageNotificationId(this.flow.snapshot().notifications, message.conversationId) } : undefined;
@@ -146,7 +178,7 @@ class DevConnectHost implements vscode.WebviewViewProvider, vscode.Disposable {
         message.id,
         message.conversationId,
         message.senderId === selfId,
-        viewing && openConversationId === message.conversationId,
+        isActivelyReading(this.windowIsForeground(), this.view?.visible === true, openConversationId, message.conversationId),
         prefs,
         this.seenNotices,
         conversations.find((item) => item.id === message.conversationId)?.peerDisplayName
@@ -159,18 +191,42 @@ class DevConnectHost implements vscode.WebviewViewProvider, vscode.Disposable {
         return note ? decideNotificationNotice(note, prefs, this.seenNotices) : null;
       })();
     if (!target) {
+      this.output.appendLine(`notice suppressed id=${message?.id ?? "notification"} focused=${vscode.window.state.focused}`);
       this.dropNotice(noticeSlot);
       return;
     }
-    this.rememberNotice(target.id);
-    const choice = await vscode.window.showInformationMessage(target.body, target.action);
+    if (noticeSlot?.notificationId && !this.rememberNotice(noticeSlot.notificationId)) {
+      this.dropNotice(noticeSlot);
+      return;
+    }
+    await this.presentNotice(target);
     this.dropNotice(noticeSlot);
+  }
+
+  private windowIsForeground(): boolean {
+    const state = vscode.window.state as { focused: boolean; active?: boolean };
+    return state.focused && state.active !== false;
+  }
+
+  private async presentNotice(target: NoticeTarget): Promise<void> {
+    if (!this.rememberNotice(target.id)) {
+      this.output.appendLine(`notice duplicate id=${target.id}`);
+      return;
+    }
+    const foreground = this.windowIsForeground();
+    this.output.appendLine(`notice show id=${target.id} action=${target.action} foreground=${foreground} viewVisible=${this.view?.visible === true}`);
+    if (!foreground) {
+      const launch = noticeLaunchUri("Bannysukumar2255", "devconnect-vscode-extension", target);
+      const toast = await showBackgroundNotice(this.toastScript, target.body, launch);
+      this.output.appendLine(`windows toast ok=${toast.ok} detail=${toast.detail}`);
+    }
+    const choice = await vscode.window.showInformationMessage(target.body, target.action);
     if (choice !== target.action || this.openingNotice) return;
     this.openingNotice = true;
     this.pending = {
       screen: target.screen,
       conversationId: target.conversationId,
-      notificationId: noticeSlot?.notificationId ?? target.notificationId,
+      notificationId: target.notificationId,
       userId: target.userId,
       friendsPanel: target.friendsPanel,
     };
@@ -192,16 +248,47 @@ class DevConnectHost implements vscode.WebviewViewProvider, vscode.Disposable {
     const note = notificationFromFrame(frame);
     if (!note || note.read || note.type !== "NEW_MESSAGE" || !note.referenceId) return;
     for (const slot of this.openNotices) {
-      if (slot.conversationId === note.referenceId && !slot.notificationId) slot.notificationId = note.id;
+      if (slot.conversationId === note.referenceId && !slot.notificationId) {
+        slot.notificationId = note.id;
+        this.rememberNotice(note.id);
+      }
     }
   }
 
-  private rememberNotice(id: string): void {
-    this.seenNotices.add(id);
+  private async recoverMissedNotices(): Promise<void> {
+    try {
+      const list = await this.auth.loadNotifications();
+      const prefs = readNoticePrefs();
+      const state = this.flow.snapshot();
+      for (const note of list.items) {
+        const reading = note.referenceId
+          ? isActivelyReading(this.windowIsForeground(), this.view?.visible === true, state.screen === "messages" ? state.activeConversationId : null, note.referenceId)
+          : false;
+        const target = decideStoredNotice(note, prefs, this.seenNotices, reading);
+        if (target) await this.presentNotice(target);
+      }
+    } catch {
+      // A failed list does not end the session. The socket remains the live source.
+    }
+  }
+
+  private rememberNotice(id: string): boolean {
+    const safeId = id.replace(/[^A-Za-z0-9_-]/g, "");
+    if (!safeId || this.seenNotices.has(safeId)) return false;
+    if (this.noticeDir) {
+      try {
+        mkdirSync(this.noticeDir, { recursive: true });
+        writeFileSync(join(this.noticeDir, safeId), "1", { flag: "wx" });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
+      }
+    }
+    this.seenNotices.add(safeId);
     if (this.seenNotices.size > 200) {
       const oldest = this.seenNotices.values().next().value;
       if (oldest) this.seenNotices.delete(oldest);
     }
+    return true;
   }
 
   private async onWebviewMessage(rawMessage: unknown): Promise<void> {
@@ -269,7 +356,13 @@ export function activate(context: vscode.ExtensionContext): void {
     });
   }
 
-  const host = new DevConnectHost(auth);
+  const output = vscode.window.createOutputChannel("DevConnect");
+  const host = new DevConnectHost(auth, join(context.globalStorageUri.fsPath, "notices"), join(context.extensionUri.fsPath, "windows-toast.ps1"), output);
+  context.subscriptions.push(output, vscode.window.registerUriHandler({
+    handleUri(uri) {
+      host.openFromNotice(uri);
+    },
+  }));
   const open = (screen: ScreenId) => () => host.open({ screen });
   context.subscriptions.push(
     host,

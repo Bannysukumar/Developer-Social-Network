@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { decideMessageNotice, decideNotificationNotice, unreadMessageNotificationId } from "../src/extension/desktop-notice";
+import { decideMessageNotice, decideNotificationNotice, decideStoredNotice, isActivelyReading, noticeLaunchUri, unreadMessageNotificationId } from "../src/extension/desktop-notice";
 
 const prefs = { messages: true, friendRequests: true, friendAccepted: true };
 
@@ -72,5 +72,39 @@ describe("desktop notices", () => {
     ];
     expect(unreadMessageNotificationId(notes, "c1")).toBe("live");
     expect(unreadMessageNotificationId(notes, "c2")).toBeUndefined();
+  });
+
+  test("notifies when VS Code is unfocused, minimized, or the sidebar is closed", () => {
+    expect(isActivelyReading(true, true, "c1", "c1")).toBe(true);
+    expect(isActivelyReading(false, true, "c1", "c1")).toBe(false);
+    expect(isActivelyReading(false, true, "c1", "c1")).toBe(false);
+    expect(isActivelyReading(true, false, "c1", "c1")).toBe(false);
+    expect(isActivelyReading(true, true, "c1", "c2")).toBe(false);
+    const prefs = { messages: true, friendRequests: true, friendAccepted: true };
+    const stored = decideStoredNotice({
+      id: "n9",
+      type: "NEW_MESSAGE",
+      referenceId: "c1",
+      message: "You received a new encrypted message",
+      read: false,
+    }, prefs, new Set(), false);
+    expect(stored?.action).toBe("Open message");
+    expect(stored?.notificationId).toBe("n9");
+    expect(stored?.body).not.toContain("secret");
+    expect(decideStoredNotice({
+      id: "n9",
+      type: "NEW_MESSAGE",
+      referenceId: "c1",
+      message: "You received a new encrypted message",
+      read: false,
+    }, prefs, new Set(), true)).toBeNull();
+    const launch = noticeLaunchUri("Bannysukumar2255", "devconnect-vscode-extension", {
+      screen: "messages",
+      notificationId: "n9",
+      conversationId: "c1",
+    });
+    expect(launch).toContain("notificationId=n9");
+    expect(launch).toContain("conversationId=c1");
+    expect(launch).not.toMatch(/Bearer|eyJ/);
   });
 });

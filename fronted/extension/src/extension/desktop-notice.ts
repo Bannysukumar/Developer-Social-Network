@@ -17,11 +17,56 @@ export interface NoticeTarget {
   readonly friendsPanel?: "requests";
 }
 
+export function noticeLaunchUri(
+  publisher: string,
+  extensionName: string,
+  target: Pick<NoticeTarget, "screen" | "notificationId" | "conversationId" | "userId" | "friendsPanel">,
+): string {
+  const params = new URLSearchParams();
+  params.set("screen", target.screen);
+  if (target.notificationId) params.set("notificationId", target.notificationId);
+  if (target.conversationId) params.set("conversationId", target.conversationId);
+  if (target.userId) params.set("userId", target.userId);
+  if (target.friendsPanel) params.set("friendsPanel", target.friendsPanel);
+  return `vscode://${publisher}.${extensionName}/notice?${params.toString()}`;
+}
+
 export function unreadMessageNotificationId(
   notifications: readonly { id: string; type: string; referenceId?: string | null; read: boolean }[],
   conversationId: string,
 ): string | undefined {
   return notifications.find((note) => note.type === "NEW_MESSAGE" && !note.read && note.referenceId === conversationId)?.id;
+}
+
+/** True only while this window is focused and that conversation is on screen. */
+export function isActivelyReading(
+  windowFocused: boolean,
+  viewVisible: boolean,
+  openConversationId: string | null,
+  conversationId: string,
+): boolean {
+  return windowFocused && viewVisible && openConversationId === conversationId;
+}
+
+export function decideStoredNotice(
+  note: NotificationDto,
+  prefs: NoticePrefs,
+  seen: ReadonlySet<string>,
+  activelyReading: boolean,
+): NoticeTarget | null {
+  if (note.read || seen.has(note.id)) return null;
+  if (note.type === "NEW_MESSAGE") {
+    if (!prefs.messages || activelyReading || !note.referenceId) return null;
+    return {
+      id: note.id,
+      body: note.message,
+      action: "Open message",
+      screen: "messages",
+      conversationId: note.referenceId,
+      notificationId: note.id,
+    };
+  }
+  return decideNotificationNotice(note, prefs, seen);
 }
 
 export function decideMessageNotice(

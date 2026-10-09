@@ -3,7 +3,7 @@
   "displayName": "DevConnect",
   "description": "A developer community inside Visual Studio Code.",
   "publisher": "Bannysukumar2255",
-  "version": "0.4.17",
+  "version": "0.4.19",
   "private": true,
   "engines": {
     "vscode": "^1.85.0"
@@ -13,6 +13,7 @@
   ],
   "activationEvents": [
     "onStartupFinished",
+    "onUri",
     "onView:devconnect.home",
     "onCommand:devconnect.open",
     "onCommand:devconnect.openMessages",
