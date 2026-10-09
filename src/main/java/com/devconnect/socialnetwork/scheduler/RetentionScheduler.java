@@ -1,6 +1,7 @@
 package com.devconnect.socialnetwork.scheduler;
 
 import com.devconnect.socialnetwork.entity.PreKeyEntity;
+import com.devconnect.socialnetwork.service.AttachmentService;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
@@ -14,10 +15,12 @@ import java.time.Duration;
 public class RetentionScheduler {
 
     private final MongoTemplate mongoTemplate;
+    private final AttachmentService attachmentService;
     private final Clock clock;
 
-    public RetentionScheduler(MongoTemplate mongoTemplate, Clock clock) {
+    public RetentionScheduler(MongoTemplate mongoTemplate, AttachmentService attachmentService, Clock clock) {
         this.mongoTemplate = mongoTemplate;
+        this.attachmentService = attachmentService;
         this.clock = clock;
     }
 
@@ -28,5 +31,6 @@ public class RetentionScheduler {
                         .and("consumedAt").lt(clock.instant().minus(Duration.ofDays(30)))),
                 PreKeyEntity.class
         );
+        attachmentService.purgeUnbound(Duration.ofHours(24));
     }
 }

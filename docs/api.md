@@ -109,6 +109,8 @@ A private account returns `limited: true` and omits bio from non-friends. A bloc
 
 Only friends can open a conversation. Users cannot friend or message across a block. An existing conversation stays in both participants' message lists while a block is active; new sends are still rejected.
 
+`POST /api/v1/conversations/{conversationId}/attachments` stores one encrypted file of at most 10 MB (`MAX_ATTACHMENT_BYTES`). The server keeps the ciphertext on the configured upload disk and returns `{id, size}`. A message may reference at most 10 attachment ids. `GET /api/v1/attachments/{attachmentId}` returns ciphertext only to a participant who can still see that message. Filenames and decryption keys stay inside the existing encrypted message. Delete for everyone removes those stored bytes. Unattached uploads are deleted after 24 hours. Set the reverse proxy body limit to at least 12 MB.
+
 ## Conversations and messages
 
 `POST /api/v1/conversations`

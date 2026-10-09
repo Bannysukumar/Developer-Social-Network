@@ -2,6 +2,8 @@ package com.devconnect.socialnetwork.websocket;
 
 import com.devconnect.socialnetwork.domain.MessageType;
 
+import java.util.List;
+
 public class ClientFrame {
 
     private String type;
@@ -12,6 +14,7 @@ public class ClientFrame {
     private String messageId;
     private String deviceId;
     private String keyId;
+    private List<String> attachmentIds;
 
     public String getType() {
         return type;
@@ -75,5 +78,13 @@ public class ClientFrame {
 
     public void setKeyId(String keyId) {
         this.keyId = keyId;
+    }
+
+    public List<String> getAttachmentIds() {
+        return attachmentIds;
+    }
+
+    public void setAttachmentIds(List<String> attachmentIds) {
+        this.attachmentIds = attachmentIds;
     }
 }

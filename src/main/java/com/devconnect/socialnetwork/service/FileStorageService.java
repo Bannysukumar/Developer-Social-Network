@@ -10,6 +10,7 @@ import org.springframework.stereotype.Service;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Clock;
@@ -55,15 +56,50 @@ public class FileStorageService {
         return repository.save(entity);
     }
 
+    public String storeOpaque(InputStream input, long declaredSize) {
+        long max = properties.getStorage().getMaxAttachmentBytes();
+        if (declaredSize <= 0 || declaredSize > max) {
+            throw new ValidationFailedException("File size is not allowed");
+        }
+        String id = Ids.newId();
+        Path root = Path.of(properties.getStorage().getLocation()).toAbsolutePath().normalize();
+        Path directory = root.resolve("attachments").normalize();
+        Path target = directory.resolve(id).normalize();
+        if (!target.startsWith(directory)) {
+            throw new ValidationFailedException("File could not be stored");
+        }
+        try {
+            Files.createDirectories(directory);
+            long written = writeLimited(target, input, max);
+            if (written != declaredSize) {
+                Files.deleteIfExists(target);
+                throw new ValidationFailedException("File size is not allowed");
+            }
+        } catch (ValidationFailedException ex) {
+            throw ex;
+        } catch (IOException ex) {
+            try {
+                Files.deleteIfExists(target);
+            } catch (IOException ignored) {
+                // The failed upload is not referenced.
+            }
+            throw new IllegalStateException("File could not be stored", ex);
+        }
+        return "attachments/" + id;
+    }
+
     public StoredFileEntity require(String fileId) {
         Ids.require(fileId);
         return repository.findById(fileId).orElseThrow(() -> new ResourceNotFoundException("Resource not found"));
     }
 
     public InputStream open(StoredFileEntity file) {
-        Path root = Path.of(properties.getStorage().getLocation()).toAbsolutePath().normalize();
-        Path target = root.resolve(file.getStorageKey()).normalize();
-        if (!target.startsWith(root) || !Files.exists(target)) {
+        return openKey(file.getStorageKey());
+    }
+
+    public InputStream openKey(String storageKey) {
+        Path target = resolveKey(storageKey);
+        if (!Files.exists(target)) {
             throw new ResourceNotFoundException("Resource not found");
         }
         try {
@@ -71,6 +107,30 @@ public class FileStorageService {
         } catch (IOException ex) {
             throw new ResourceNotFoundException("Resource not found");
         }
+    }
+
+    public void deleteKey(String storageKey) {
+        if (storageKey == null || storageKey.isBlank()) {
+            return;
+        }
+        try {
+            Files.deleteIfExists(resolveKey(storageKey));
+        } catch (IOException | ResourceNotFoundException ignored) {
+            // Metadata removal still drops the reference.
+        }
+    }
+
+    private Path resolveKey(String storageKey) {
+        if (storageKey == null || storageKey.isBlank() || storageKey.contains("..")
+                || storageKey.startsWith("/") || storageKey.startsWith("\\") || storageKey.contains(":")) {
+            throw new ResourceNotFoundException("Resource not found");
+        }
+        Path root = Path.of(properties.getStorage().getLocation()).toAbsolutePath().normalize();
+        Path target = root.resolve(storageKey).normalize();
+        if (!target.startsWith(root)) {
+            throw new ResourceNotFoundException("Resource not found");
+        }
+        return target;
     }
 
     public void deleteAllForOwner(String ownerId) {
@@ -105,6 +165,25 @@ public class FileStorageService {
             }
             repository.delete(file);
         });
+    }
+
+    private long writeLimited(Path target, InputStream input, long max) throws IOException {
+        long total = 0;
+        try (InputStream in = input; OutputStream out = Files.newOutputStream(target)) {
+            byte[] buffer = new byte[8192];
+            int read;
+            while ((read = in.read(buffer)) >= 0) {
+                total += read;
+                if (total > max) {
+                    throw new ValidationFailedException("File size is not allowed");
+                }
+                out.write(buffer, 0, read);
+            }
+        } catch (ValidationFailedException ex) {
+            Files.deleteIfExists(target);
+            throw ex;
+        }
+        return total;
     }
 
     private String detectImage(byte[] bytes) {

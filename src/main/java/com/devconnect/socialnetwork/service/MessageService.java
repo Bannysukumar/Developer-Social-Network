@@ -45,6 +45,7 @@ public class MessageService {
     private final ConversationService conversationService;
     private final FriendshipService friendshipService;
     private final BlockService blockService;
+    private final AttachmentService attachmentService;
     private final NotificationService notificationService;
     private final MessageMapper messageMapper;
     private final WebSocketSessionRegistry sessionRegistry;
@@ -57,6 +58,7 @@ public class MessageService {
             ConversationService conversationService,
             FriendshipService friendshipService,
             BlockService blockService,
+            AttachmentService attachmentService,
             NotificationService notificationService,
             MessageMapper messageMapper,
             WebSocketSessionRegistry sessionRegistry,
@@ -68,6 +70,7 @@ public class MessageService {
         this.conversationService = conversationService;
         this.friendshipService = friendshipService;
         this.blockService = blockService;
+        this.attachmentService = attachmentService;
         this.notificationService = notificationService;
         this.messageMapper = messageMapper;
         this.sessionRegistry = sessionRegistry;
@@ -85,6 +88,13 @@ public class MessageService {
             throw new ValidationFailedException("System messages cannot be created by clients");
         }
         String ciphertext = CiphertextValidator.require(request.ciphertext());
+        java.util.List<String> attachmentIds = request.attachmentIds() == null ? java.util.List.of() : request.attachmentIds();
+        if (!attachmentIds.isEmpty()) {
+            attachmentService.reserve(senderId, conversationId, attachmentIds);
+            if (type == MessageType.TEXT) {
+                type = MessageType.FILE;
+            }
+        }
         String clientMessageId = blankToNull(request.clientMessageId());
         if (clientMessageId != null) {
             var existing = messageRepository.findByConversationIdAndSenderIdAndClientMessageId(
@@ -104,6 +114,7 @@ public class MessageService {
         message.setClientMessageId(clientMessageId);
         message.setDeviceId(blankToNull(request.deviceId()));
         message.setKeyId(blankToNull(request.keyId()));
+        message.setAttachmentIds(attachmentIds);
         message.setCreatedAt(clock.instant());
         try {
             messageRepository.save(message);
@@ -112,6 +123,14 @@ public class MessageService {
                     .findByConversationIdAndSenderIdAndClientMessageId(conversationId, senderId, clientMessageId)
                     .orElseThrow(() -> ex);
             return new WriteResult<>(messageMapper.toResponse(existing), false);
+        }
+        if (!attachmentIds.isEmpty()) {
+            try {
+                attachmentService.bind(message.getId(), attachmentIds);
+            } catch (RuntimeException ex) {
+                messageRepository.deleteById(message.getId());
+                throw ex;
+            }
         }
         conversationService.touch(conversation);
         MessageResponse response = messageMapper.toResponse(message);
@@ -249,9 +268,14 @@ public class MessageService {
             }
             long started = System.nanoTime();
             if (!message.isDeletedForEveryone()) {
+                java.util.List<String> attachments = message.getAttachmentIds() == null
+                        ? java.util.List.of()
+                        : java.util.List.copyOf(message.getAttachmentIds());
                 message.setDeletedForEveryone(true);
                 message.setCiphertext("");
+                message.setAttachmentIds(java.util.List.of());
                 messageRepository.save(message);
+                attachmentService.deleteBound(attachments);
             }
             long persisted = System.nanoTime();
             MessageResponse response = messageMapper.toResponse(message);

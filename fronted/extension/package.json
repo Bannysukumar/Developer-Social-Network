@@ -3,7 +3,7 @@
   "displayName": "DevConnect",
   "description": "A developer community inside Visual Studio Code.",
   "publisher": "Bannysukumar2255",
-  "version": "0.4.25",
+  "version": "0.4.26",
   "private": true,
   "engines": {
     "vscode": "^1.85.0"

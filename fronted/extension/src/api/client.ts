@@ -27,6 +27,8 @@ export interface ApiRequestOptions {
     readonly bytes: Uint8Array;
   };
   readonly signal?: AbortSignal;
+  readonly timeoutMs?: number;
+  readonly binary?: boolean;
   readonly accessToken?: string | null;
   readonly skipAuth?: boolean;
 }
@@ -112,7 +114,7 @@ export class ApiClient {
     const controller = new AbortController();
     const abortForCaller = (): void => controller.abort("caller");
     options.signal?.addEventListener("abort", abortForCaller, { once: true });
-    const timeout = setTimeout(() => controller.abort("timeout"), this.config.timeoutMs);
+    const timeout = setTimeout(() => controller.abort("timeout"), options.timeoutMs ?? this.config.timeoutMs);
 
     try {
       let response: Response;
@@ -148,6 +150,9 @@ export class ApiClient {
       if (!response.ok) {
         throw await this.toHttpError(response);
       }
+      if (options.binary) {
+        return new Uint8Array(await response.arrayBuffer());
+      }
       if (response.status === 204) {
         if (dataSchema) {
           throw new ApiError("invalid_response", "The DevConnect API returned an unexpected response.");
@@ -182,6 +187,14 @@ export class ApiClient {
       clearTimeout(timeout);
       options.signal?.removeEventListener("abort", abortForCaller);
     }
+  }
+
+  async bytes(path: string, options: ApiRequestOptions = {}): Promise<Uint8Array> {
+    const data = await this.request(path, undefined, { ...options, binary: true, timeoutMs: options.timeoutMs ?? 60_000 });
+    if (!(data instanceof Uint8Array)) {
+      throw new ApiError("invalid_response", "The DevConnect API returned an unexpected response.");
+    }
+    return data;
   }
 
   private async toHttpError(response: Response): Promise<ApiError> {

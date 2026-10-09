@@ -137,6 +137,40 @@ export const webviewMessageSchema = z.discriminatedUnion("type", [
   }).strict(),
   z.object({
     version: z.literal(1),
+    type: z.literal("sendFiles"),
+    conversationId: z.string().min(1),
+    text: z.string().max(4000).optional(),
+    confirmedRisky: z.boolean().optional(),
+    files: z.array(z.object({
+      name: z.string().min(1).max(180),
+      mime: z.string().max(120),
+      base64: z.string().min(1),
+    })).min(1).max(10),
+  }).strict(),
+  z.object({
+    version: z.literal(1),
+    type: z.literal("retryFiles"),
+    localId: z.string().min(1),
+  }).strict(),
+  z.object({
+    version: z.literal(1),
+    type: z.literal("downloadFile"),
+    id: z.string().min(1),
+    name: z.string().min(1).max(180),
+    key: z.string().min(1),
+    iv: z.string().min(1),
+  }).strict(),
+  z.object({
+    version: z.literal(1),
+    type: z.literal("previewFile"),
+    messageId: z.string().min(1),
+    id: z.string().min(1),
+    key: z.string().min(1),
+    iv: z.string().min(1),
+    mime: z.string().max(120),
+  }).strict(),
+  z.object({
+    version: z.literal(1),
     type: z.literal("deleteMessage"),
     messageId: z.string().min(1),
     scope: z.enum(["me", "everyone"]),
@@ -166,6 +200,15 @@ export type WebviewMessage = z.infer<typeof webviewMessageSchema>;
 const displayMessageSchema = messageSchema.extend({
   displayText: z.string(),
   sendState: z.enum(["failed", "sending"]).optional(),
+  attachments: z.array(z.object({
+    id: z.string(),
+    name: z.string(),
+    size: z.number(),
+    mime: z.string(),
+    key: z.string(),
+    iv: z.string(),
+    preview: z.string().optional(),
+  })).optional(),
 });
 
 export const hostMessageSchema = z.object({

@@ -24,12 +24,15 @@ import type {
 } from "../shared/api-types";
 import { createDeviceMaterial, hasVerifiedSignedPreKey, type DeviceMaterial } from "./crypto/device-keys";
 import { decryptMessage, encryptForDevices, isEncryptedEnvelope, type RecipientBundle } from "./crypto/message-cipher";
+import { openFile, sealFile } from "./crypto/file-cipher";
+import { encodeFilePayload, parseFilePayload, type SharedFile } from "./crypto/file-payload";
 import { decodeOpaqueText } from "../shared/payload";
 import { SessionStore } from "./session";
 
 export interface DisplayMessage extends MessageDto {
   readonly displayText: string;
   readonly sendState?: "failed" | "sending";
+  readonly attachments?: readonly SharedFile[];
 }
 
 export interface AuthServiceOptions {
@@ -367,6 +370,60 @@ export class AuthService {
     return this.displayMessage(message);
   }
 
+  async sendFiles(
+    conversationId: string,
+    text: string,
+    files: readonly { name: string; mime: string; bytes: Buffer }[],
+    clientMessageId: string,
+  ): Promise<DisplayMessage> {
+    if (files.length < 1 || files.length > 10) {
+      throw new ApiError("request", "Too many files");
+    }
+    await this.ensureDeviceKeys();
+    const keys = this.deviceKeys;
+    if (!keys?.deviceId) {
+      throw new ApiError("configuration", "This device is not registered.");
+    }
+    const uploaded: SharedFile[] = [];
+    for (const file of files) {
+      if (file.bytes.length < 1 || file.bytes.length > 10_485_760) {
+        throw new ApiError("request", "File size is not allowed");
+      }
+      const sealed = sealFile(file.bytes);
+      const stored = await this.conversationsApi.uploadAttachment(conversationId, sealed.ciphertext);
+      uploaded.push({
+        id: stored.id,
+        name: file.name.replace(/[\\/]/g, "_").slice(0, 180),
+        size: file.bytes.length,
+        mime: file.mime || "application/octet-stream",
+        key: sealed.key,
+        iv: sealed.iv,
+      });
+    }
+    const conversation = await this.conversationsApi.get(conversationId);
+    const selfId = this.getUser()?.id;
+    const recipientId = conversation.participantIds.find((id) => id !== selfId);
+    if (!recipientId) {
+      throw new ApiError("request", "Choose a friend or conversation first.");
+    }
+    const bundle = await this.keysApi.bundle(recipientId);
+    const recipients = this.pickRecipients(bundle.devices);
+    const message = await this.conversationsApi.sendMessage(conversationId, {
+      ciphertext: encryptForDevices(encodeFilePayload(text, uploaded), conversationId, keys, recipients),
+      messageType: uploaded.every((file) => file.mime.startsWith("image/")) ? "IMAGE" : "FILE",
+      clientMessageId,
+      deviceId: keys.deviceId,
+      keyId: String(recipients[0]?.oneTimePreKey?.preKeyId ?? recipients[0]?.signedPreKey.preKeyId ?? ""),
+      attachmentIds: uploaded.map((file) => file.id),
+    });
+    return this.displayMessage(message);
+  }
+
+  async downloadAttachment(attachmentId: string, key: string, iv: string): Promise<Uint8Array> {
+    const ciphertext = await this.conversationsApi.downloadAttachment(attachmentId);
+    return openFile(Buffer.from(ciphertext), key, iv);
+  }
+
   markConversationRead(conversationId: string): Promise<unknown> {
     return this.conversationsApi.markConversationRead(conversationId);
   }
@@ -416,7 +473,7 @@ export class AuthService {
     if (error instanceof Error && error.message.includes("must use HTTPS")) {
       return error.message;
     }
-    if (error instanceof Error && /DevConnect API|Invalid user id|encryption key|key signature|not registered|Profile picture|You can't interact/.test(error.message)) {
+    if (error instanceof Error && /DevConnect API|Invalid user id|encryption key|key signature|not registered|Profile picture|You can't interact|File size|Too many files|file could not be opened/.test(error.message)) {
       return error.message;
     }
     return "Something went wrong. Try again.";
@@ -430,9 +487,11 @@ export class AuthService {
         sendState: message.sendState,
       };
     }
+    const described = this.describeMessage(message);
     return {
       ...message,
-      displayText: this.readMessage(message),
+      displayText: described.displayText,
+      attachments: described.attachments,
     };
   }
 
@@ -440,13 +499,23 @@ export class AuthService {
     return this.displayMessage(message);
   }
 
-  private readMessage(message: MessageDto): string {
-    if (message.deletedForEveryone) return "This message was deleted";
+  private describeMessage(message: MessageDto): { displayText: string; attachments?: readonly SharedFile[] } {
+    if (message.deletedForEveryone) return { displayText: "This message was deleted" };
     const ciphertext = message.ciphertext ?? "";
     const decrypted = decryptMessage(ciphertext, this.deviceKeys);
-    if (decrypted !== undefined) return decrypted;
-    if (isEncryptedEnvelope(ciphertext)) return "Encrypted message";
-    return decodeOpaqueText(ciphertext);
+    if (decrypted !== undefined) {
+      const payload = parseFilePayload(decrypted);
+      if (payload) {
+        const caption = payload.text.trim();
+        return {
+          displayText: caption || payload.files.map((file) => file.name).join(", "),
+          attachments: payload.files,
+        };
+      }
+      return { displayText: decrypted };
+    }
+    if (isEncryptedEnvelope(ciphertext)) return { displayText: "Encrypted message" };
+    return { displayText: decodeOpaqueText(ciphertext) };
   }
 
   private pickRecipients(devices: readonly {

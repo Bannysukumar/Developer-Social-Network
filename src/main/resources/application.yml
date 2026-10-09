@@ -13,8 +13,8 @@ spring:
       enabled: false
   servlet:
     multipart:
-      max-file-size: 2MB
-      max-request-size: 2MB
+      max-file-size: 12MB
+      max-request-size: 12MB
   data:
     mongodb:
       auto-index-creation: true
@@ -36,8 +36,9 @@ server:
     whitelabel:
       enabled: false
   tomcat:
-    max-http-form-post-size: 2MB
-    max-swallow-size: 2MB
+    max-http-form-post-size: 12MB
+    max-swallow-size: 12MB
+    max-http-post-size: 12MB
     accesslog:
       enabled: false
 
@@ -111,6 +112,8 @@ app:
   storage:
     location: ${UPLOAD_DIR:./uploads}
     max-image-bytes: 2097152
+    max-attachment-bytes: ${MAX_ATTACHMENT_BYTES:10485760}
+    max-attachments-per-message: ${MAX_ATTACHMENTS_PER_MESSAGE:10}
   security:
     trust-proxy: ${TRUST_PROXY:false}
     require-email-verified: ${REQUIRE_EMAIL_VERIFIED:false}

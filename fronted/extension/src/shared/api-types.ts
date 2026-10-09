@@ -150,6 +150,7 @@ export const messageSchema = z.object({
   deliveredAt: z.string().nullable().optional(),
   readAt: z.string().nullable().optional(),
   deletedForEveryone: z.boolean().optional(),
+  attachmentIds: z.array(z.string()).optional(),
 }).passthrough();
 
 export type MessageDto = z.infer<typeof messageSchema>;
@@ -164,9 +165,15 @@ export const sendMessageRequestSchema = z.object({
   clientMessageId: z.string().optional(),
   deviceId: z.string().optional(),
   keyId: z.string().optional(),
+  attachmentIds: z.array(z.string().min(1)).max(10).optional(),
 }).strict();
 
 export type SendMessageRequestDto = z.infer<typeof sendMessageRequestSchema>;
+
+export const attachmentCreatedSchema = z.object({
+  id: z.string().min(1),
+  size: z.number().int().nonnegative(),
+}).strict();
 
 export const notificationSchema = z.object({
   id: z.string().min(1),

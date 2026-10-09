@@ -87,7 +87,8 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
                         clientFrame.getMessageType(),
                         clientFrame.getClientMessageId(),
                         clientFrame.getDeviceId(),
-                        clientFrame.getKeyId()
+                        clientFrame.getKeyId(),
+                        clientFrame.getAttachmentIds()
                 ));
                 case "DELIVERED" -> messageService.markDelivered(userId, clientFrame.getMessageId());
                 case "READ" -> messageService.markRead(userId, clientFrame.getMessageId());

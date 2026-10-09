@@ -90,7 +90,8 @@ public class RateLimitFilter extends OncePerRequestFilter {
         if (HttpMethod.POST.matches(method) && path.startsWith("/api/v1/friend-requests/")) {
             return new Rule("friend:" + user, limits.getFriendRequestPerHour(), Duration.ofHours(1));
         }
-        if (HttpMethod.POST.matches(method) && path.startsWith("/api/v1/conversations/") && path.endsWith("/messages")) {
+        if (HttpMethod.POST.matches(method) && path.startsWith("/api/v1/conversations/")
+                && (path.endsWith("/messages") || path.endsWith("/attachments"))) {
             return new Rule("message:" + user, limits.getMessagePerMinute(), Duration.ofMinutes(1));
         }
         return null;

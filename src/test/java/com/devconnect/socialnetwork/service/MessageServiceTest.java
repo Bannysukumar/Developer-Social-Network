@@ -45,6 +45,8 @@ class MessageServiceTest {
     @Mock
     private BlockService blockService;
     @Mock
+    private AttachmentService attachmentService;
+    @Mock
     private NotificationService notificationService;
     @Mock
     private WebSocketSessionRegistry sessionRegistry;
@@ -58,6 +60,7 @@ class MessageServiceTest {
                 conversationService,
                 friendshipService,
                 blockService,
+                attachmentService,
                 notificationService,
                 new MessageMapper(),
                 sessionRegistry,
@@ -122,7 +125,7 @@ class MessageServiceTest {
         doThrow(new ForbiddenException("You can't interact with this account."))
                 .when(blockService).assertCanInteract("ada", "bob");
 
-        assertThatThrownBy(() -> service.send("ada", "c1", new SendMessageRequest("ciphertext", null, null, null, null)))
+        assertThatThrownBy(() -> service.send("ada", "c1", new SendMessageRequest("ciphertext", null, null, null, null, null)))
                 .isInstanceOf(ForbiddenException.class);
         verify(messageRepository, never()).save(any());
         verify(notificationService, never()).notifyNewMessage(any(), any(), any());

@@ -7,6 +7,7 @@ import { messageFromFrame, notificationFromFrame, presenceFromFrame, typingFromF
 import { unreadMessageNotificationId } from "./desktop-notice";
 import { mergePresence } from "./presence-state";
 import { applyNotificationRead, applyTombstone, mergeHistory, mergeLiveMessage, mergeNotification, mergeReceipt } from "./realtime-state";
+import { isRiskyFile } from "./crypto/file-payload";
 import { emptyHostState, type HostState } from "./webview";
 
 export class SessionFlow {
@@ -49,10 +50,12 @@ export class SessionFlow {
   private readInflight = new Set<string>();
   private readAgain = new Set<string>();
   private hiddenPresence = new Set<string>();
+  private pendingFiles = new Map<string, { conversationId: string; text: string; clientMessageId: string; files: { name: string; mime: string; bytes: Buffer }[] }>();
   private blockEpoch = new Map<string, number>();
   constructor(
     private readonly auth: AuthService,
     private readonly onChange: () => void,
+    private readonly saveFile: (name: string, bytes: Uint8Array) => Promise<void> = async () => undefined,
   ) {}
 
   reloadConfig(config: ApiConfig): void {
@@ -778,6 +781,75 @@ export class SessionFlow {
               sendState: "failed",
             }, ...this.messages.filter((item) => !(item.id.startsWith("local-") && item.displayText === message.text))];
           }
+          break;
+        }
+        case "sendFiles":
+        case "retryFiles": {
+          const pending = message.type === "retryFiles" ? this.pendingFiles.get(message.localId) : undefined;
+          const conversationId = message.type === "sendFiles" ? message.conversationId : pending?.conversationId;
+          const text = message.type === "sendFiles" ? (message.text ?? "") : (pending?.text ?? "");
+          const files = message.type === "sendFiles"
+            ? message.files.map((file) => ({ name: file.name, mime: file.mime, bytes: Buffer.from(file.base64, "base64") }))
+            : pending?.files;
+          const clientMessageId = pending?.clientMessageId ?? `ext-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+          if (!conversationId || !files || files.length < 1) break;
+          if (this.messageLock !== "none") {
+            this.error = this.messageLock === "blocked-by-me" ? "You blocked this user." : "You can't message this user.";
+            break;
+          }
+          if (files.some((file) => isRiskyFile(file.name)) && message.type === "sendFiles" && !message.confirmedRisky) {
+            this.error = "That file type needs confirmation before it can be sent.";
+            break;
+          }
+          const localId = message.type === "retryFiles" ? message.localId : `local-${Date.now()}`;
+          this.pendingFiles.set(localId, { conversationId, text, clientMessageId, files });
+          const label = text.trim() || files.map((file) => file.name).join(", ");
+          this.messages = [{
+            id: localId,
+            conversationId,
+            senderId: this.auth.getUser()?.id ?? "me",
+            recipientId: this.peerId() ?? "peer",
+            ciphertext: "",
+            messageType: "FILE",
+            status: "SENT",
+            displayText: label,
+            sendState: "sending",
+            attachments: files.map((file) => ({ id: localId, name: file.name, size: file.bytes.length, mime: file.mime, key: "", iv: "" })),
+          }, ...this.messages.filter((item) => item.id !== localId)];
+          this.pushState();
+          try {
+            const sent = await this.auth.sendFiles(conversationId, text, files, clientMessageId);
+            this.pendingFiles.delete(localId);
+            this.seenMessageIds.add(sent.id);
+            this.messages = [sent, ...this.messages.filter((item) => item.id !== sent.id && item.id !== localId)];
+            this.rememberPreview(conversationId, sent.displayText);
+            this.activeConversationId = conversationId;
+          } catch (error) {
+            const detail = this.auth.userFacingError(error);
+            if (/can't interact|Only friends can exchange messages|Key material is available to friends|encryption key|not registered/.test(detail)) {
+              this.pendingFiles.delete(localId);
+              this.messages = this.messages.filter((item) => item.id !== localId);
+              this.error = detail;
+              break;
+            }
+            this.messages = this.messages.map((item) => item.id === localId ? { ...item, sendState: "failed" as const } : item);
+            this.error = detail;
+          }
+          break;
+        }
+        case "downloadFile": {
+          const bytes = await this.auth.downloadAttachment(message.id, message.key, message.iv);
+          await this.saveFile(message.name.replace(/[\\/]/g, "_"), bytes);
+          break;
+        }
+        case "previewFile": {
+          const bytes = await this.auth.downloadAttachment(message.id, message.key, message.iv);
+          if (!message.mime.startsWith("image/") || bytes.byteLength > 1_500_000) break;
+          const preview = `data:${message.mime};base64,${Buffer.from(bytes).toString("base64")}`;
+          this.messages = this.messages.map((item) => {
+            if (item.id !== message.messageId || !item.attachments) return item;
+            return { ...item, attachments: item.attachments.map((file) => file.id === message.id ? { ...file, preview } : file) };
+          });
           break;
         }
         case "loadNotifications": {

@@ -1,6 +1,7 @@
 import type { ApiClient } from "./client";
 import { pathId } from "./users";
 import {
+  attachmentCreatedSchema,
   conversationSchema,
   createConversationRequestSchema,
   cursorPageSchema,
@@ -63,6 +64,18 @@ export class ConversationsApi {
         query: { limit, cursor },
       },
     );
+  }
+
+  uploadAttachment(conversationId: string, bytes: Uint8Array): Promise<{ id: string; size: number }> {
+    return this.client.request(`conversations/${pathId(conversationId)}/attachments`, attachmentCreatedSchema, {
+      method: "POST",
+      timeoutMs: 60_000,
+      multipart: { filename: "blob", contentType: "application/octet-stream", bytes },
+    });
+  }
+
+  downloadAttachment(attachmentId: string): Promise<Uint8Array> {
+    return this.client.bytes(`attachments/${pathId(attachmentId)}`);
   }
 
   sendMessage(conversationId: string, input: SendMessageRequestDto): Promise<MessageDto> {

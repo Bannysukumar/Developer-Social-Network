@@ -224,8 +224,14 @@ export function renderWebview(webview: Webview, state: HostState): string {
   .thread-person strong, .thread-person span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .icon-btn { width: 28px; min-width: 28px; padding: 0; }
   #thread { flex: 1; min-height: 0; height: 100%; display: flex; flex-direction: column; justify-content: flex-start; gap: 8px; }
-  .composer { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: end; flex: 0 0 auto; position: sticky; bottom: 0; padding: 8px 0; background: var(--vscode-editor-background); }
+  .composer { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: end; flex: 0 0 auto; position: sticky; bottom: 0; padding: 8px 0; background: var(--vscode-editor-background); }
   .composer textarea { min-height: 36px; max-height: 120px; }
+  .attach-tray { grid-column: 1 / -1; display: flex; gap: 8px; flex-wrap: wrap; }
+  .attach-chip { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .file-card { display: flex; gap: 8px; align-items: center; margin-top: 6px; }
+  .file-card img { max-width: 220px; max-height: 160px; object-fit: contain; }
+  .lightbox { position: fixed; inset: 0; background: rgba(0,0,0,.72); display: flex; align-items: center; justify-content: center; z-index: 30; }
+  .lightbox img { max-width: 92%; max-height: 92%; object-fit: contain; }
   .send-btn { width: 32px; min-height: 32px; border-radius: 16px; padding: 0; }
   .chat-empty { display: grid; justify-items: start; text-align: left; gap: 6px; align-self: stretch; padding: 8px 0; }
   .msg-meta { margin-top: 4px; font-size: 11px; color: var(--vscode-descriptionForeground); }
@@ -415,11 +421,15 @@ export function renderWebview(webview: Webview, state: HostState): string {
         <button class="btn" type="button" id="jump-latest" hidden>↓ New messages</button>
         <p class="muted" id="thread-block" hidden>You blocked this user.</p>
         <form id="message-form" class="composer">
+          <div id="attach-tray" class="attach-tray"></div>
           <label>Message
             <textarea name="text" maxlength="4000" rows="1" placeholder="Write a message..."></textarea>
           </label>
+          <button class="btn quiet" id="attach-btn" type="button" aria-label="Attach files">＋</button>
+          <input id="file-input" type="file" multiple hidden>
           <button class="btn primary send-btn" id="send-btn" type="submit" aria-label="Send" disabled>➤</button>
         </form>
+        <div id="lightbox" class="lightbox" hidden></div>
       </div>
     </section>
 
@@ -509,7 +519,7 @@ export function renderWebview(webview: Webview, state: HostState): string {
         <button class="btn quiet" type="button" data-settings="menu">Settings</button>
         <h1>About</h1>
         <p>DevConnect</p>
-        <p class="muted" id="about-version">Version 0.4.25</p>
+        <p class="muted" id="about-version">Version 0.4.26</p>
         <p class="muted">A developer network inside Visual Studio Code. Messages stay encrypted on your devices.</p>
       </div>
     </section>
@@ -627,6 +637,13 @@ export function renderWebview(webview: Webview, state: HostState): string {
     if (presence.status === "ONLINE") return "Online";
     if (presence.lastSeenAt) return "Last seen " + when(presence.lastSeenAt);
     return "Offline";
+  }
+  let pendingFiles = [];
+  function fileSize(size) {
+    const value = Number(size) || 0;
+    if (value < 1024) return value + " B";
+    if (value < 1048576) return (value / 1024).toFixed(1) + " KB";
+    return (value / 1048576).toFixed(1) + " MB";
   }
   function countText(count) {
     if (!count) return "";
@@ -839,7 +856,20 @@ export function renderWebview(webview: Webview, state: HostState): string {
       const menu = openMenuId === m.id
         ? '<div class="msg-menu">' + (mine && !deleted ? '<button class="btn danger" type="button" data-act="delete-everyone" data-id="' + esc(m.id) + '">Delete for everyone</button>' : "") + '<button class="btn" type="button" data-act="delete-me" data-id="' + esc(m.id) + '">Delete for me</button></div>'
         : "";
-      return '<div class="msg ' + (mine ? "mine" : "theirs") + (failed ? " failed" : "") + (deleted ? " deleted" : "") + '">' + esc(m.displayText) + '<div class="msg-meta">' + esc(clock(m.createdAt)) + receipt + actions + '</div>' + menu + (failed ? '<div class="msg-meta">Message failed to send.</div>' + retry : "") + '</div>';
+      const files = (m.attachments || []).map((file) => {
+        if (!file.key) return '<div class="file-card"><span>' + esc(file.name) + '</span><span class="muted">' + esc(fileSize(file.size)) + '</span></div>';
+        if (file.mime && file.mime.startsWith("image/")) {
+          const picture = file.preview
+            ? '<img src="' + esc(file.preview) + '" alt="' + esc(file.name) + '" data-act="open-preview" data-src="' + esc(file.preview) + '">'
+            : '<button class="btn" type="button" data-act="preview-file" data-message="' + esc(m.id) + '" data-id="' + esc(file.id) + '" data-key="' + esc(file.key) + '" data-iv="' + esc(file.iv) + '" data-mime="' + esc(file.mime) + '">View image</button>';
+          return '<div class="file-card">' + picture + '</div>';
+        }
+        return '<div class="file-card"><span>' + esc(file.name) + '</span><span class="muted">' + esc(fileSize(file.size)) + '</span><button class="btn" type="button" data-act="download-file" data-id="' + esc(file.id) + '" data-name="' + esc(file.name) + '" data-key="' + esc(file.key) + '" data-iv="' + esc(file.iv) + '">Save</button></div>';
+      }).join("");
+      const retryFiles = (m.attachments || []).length && m.id.indexOf("local-") === 0
+        ? '<button class="btn" type="button" data-act="retry-files" data-id="' + esc(m.id) + '">Retry</button>'
+        : retry;
+      return '<div class="msg ' + (mine ? "mine" : "theirs") + (failed ? " failed" : "") + (deleted ? " deleted" : "") + '">' + (deleted ? "" : files) + (m.displayText ? esc(m.displayText) : "") + '<div class="msg-meta">' + esc(clock(m.createdAt)) + receipt + actions + '</div>' + menu + (failed ? '<div class="msg-meta">Message failed to send.</div>' + retryFiles : "") + '</div>';
     }).join("") : '<div class="chat-empty">' + avatarMarkup({ displayName: person.name, username: person.username }, "lg") + '<strong>You\\'re connected with ' + esc(person.name) + '</strong><span class="muted">Start the conversation by saying hello.</span></div>';
     if (nearBottom || ordered.length < 2) {
       list.scrollTop = list.scrollHeight;
@@ -933,11 +963,19 @@ export function renderWebview(webview: Webview, state: HostState): string {
     const sendBtn = document.getElementById("send-btn");
     if (sendBtn) {
       const empty = !(composerBox instanceof HTMLTextAreaElement) || !composerBox.value.trim();
-      sendBtn.disabled = !!state.busy || empty || lock !== "none";
+      sendBtn.disabled = !!state.busy || (empty && pendingFiles.length === 0) || lock !== "none";
       sendBtn.textContent = state.busy && inThread ? "…" : "➤";
       sendBtn.setAttribute("aria-label", state.busy && inThread ? "Sending" : "Send");
     }
     if (composerBox instanceof HTMLTextAreaElement) composerBox.disabled = !!state.busy || lock !== "none";
+    const attachBtn = document.getElementById("attach-btn");
+    if (attachBtn) attachBtn.disabled = !!state.busy || lock !== "none";
+    const tray = document.getElementById("attach-tray");
+    if (tray) {
+      tray.innerHTML = pendingFiles.map((file, index) =>
+        '<span class="attach-chip">' + esc(file.name) + ' <button class="btn quiet" type="button" data-act="remove-file" data-index="' + index + '" aria-label="Remove">×</button></span>'
+      ).join("");
+    }
     document.getElementById("device-list").innerHTML = (state.devices || []).length ? state.devices.map((d) =>
       '<div class="card"><strong>' + esc(d.deviceName || d.id) + '</strong><span class="muted">' + esc(d.platform || "") + '</span><button class="btn" data-act="revoke" data-id="' + esc(d.id) + '">Revoke</button></div>'
     ).join("") : '<p class="muted">No devices listed.</p>';
@@ -1012,6 +1050,31 @@ export function renderWebview(webview: Webview, state: HostState): string {
         everyone ? "Delete for everyone" : "Delete for me",
         () => vscode.postMessage({ version: 1, type: "deleteMessage", messageId: id, scope: everyone ? "everyone" : "me" })
       );
+      return;
+    }
+    if (act === "remove-file") {
+      pendingFiles.splice(Number(target.getAttribute("data-index")), 1);
+      apply(state);
+      return;
+    }
+    if (act === "preview-file") {
+      vscode.postMessage({ version: 1, type: "previewFile", messageId: target.getAttribute("data-message") || "", id: target.getAttribute("data-id") || "", key: target.getAttribute("data-key") || "", iv: target.getAttribute("data-iv") || "", mime: target.getAttribute("data-mime") || "" });
+      return;
+    }
+    if (act === "open-preview") {
+      const box = document.getElementById("lightbox");
+      if (box) {
+        box.hidden = false;
+        box.innerHTML = '<img src="' + esc(target.getAttribute("data-src") || "") + '" alt="">';
+      }
+      return;
+    }
+    if (act === "download-file") {
+      vscode.postMessage({ version: 1, type: "downloadFile", id: target.getAttribute("data-id") || "", name: target.getAttribute("data-name") || "download", key: target.getAttribute("data-key") || "", iv: target.getAttribute("data-iv") || "" });
+      return;
+    }
+    if (act === "retry-files") {
+      vscode.postMessage({ version: 1, type: "retryFiles", localId: target.getAttribute("data-id") || "" });
       return;
     }
     if (act === "retry-message") {
@@ -1097,11 +1160,64 @@ export function renderWebview(webview: Webview, state: HostState): string {
     reader.readAsDataURL(file);
   });
   document.getElementById("password-form").addEventListener("submit", (e) => { e.preventDefault(); const d = new FormData(e.target); vscode.postMessage({ version: 1, type: "changePassword", currentPassword: String(d.get("currentPassword")||""), newPassword: String(d.get("newPassword")||"") }); e.target.reset(); });
+  const riskyExt = new Set(["exe", "bat", "cmd", "com", "msi", "dll", "scr", "ps1", "vbs", "js", "jar", "apk", "sh", "hta"]);
+  function addPending(fileList) {
+    const next = [...pendingFiles];
+    for (const file of fileList) {
+      if (next.length >= 10) break;
+      if (!file || file.size < 1 || file.size > 10485760) {
+        state = { ...state, error: "Each file must be between 1 byte and 10 MB." };
+        apply(state);
+        return;
+      }
+      next.push(file);
+    }
+    pendingFiles = next;
+    apply(state);
+  }
+  document.getElementById("attach-btn").addEventListener("click", () => document.getElementById("file-input").click());
+  document.getElementById("file-input").addEventListener("change", (event) => {
+    const input = event.target;
+    if (input instanceof HTMLInputElement && input.files) addPending(input.files);
+    if (input instanceof HTMLInputElement) input.value = "";
+  });
+  const threadDrop = document.getElementById("thread");
+  threadDrop.addEventListener("dragover", (event) => event.preventDefault());
+  threadDrop.addEventListener("drop", (event) => {
+    event.preventDefault();
+    if (event.dataTransfer && event.dataTransfer.files) addPending(event.dataTransfer.files);
+  });
+  document.getElementById("lightbox").addEventListener("click", () => { document.getElementById("lightbox").hidden = true; });
   document.getElementById("message-form").addEventListener("submit", (e) => {
     e.preventDefault();
     if (!state.activeConversationId || state.busy) return;
     const box = e.target.querySelector("textarea");
     const text = box instanceof HTMLTextAreaElement ? box.value.trim() : "";
+    if (pendingFiles.length) {
+      const risky = pendingFiles.some((file) => riskyExt.has((file.name.split(".").pop() || "").toLowerCase()));
+      const sendSelected = (confirmedRisky) => {
+        const files = pendingFiles.slice();
+        pendingFiles = [];
+        apply(state);
+        Promise.all(files.map((file) => new Promise((resolve) => {
+          const reader = new FileReader();
+          reader.onload = () => {
+            const result = typeof reader.result === "string" ? reader.result : "";
+            resolve({ name: file.name, mime: file.type || "application/octet-stream", base64: (result.split(",")[1] || "") });
+          };
+          reader.readAsDataURL(file);
+        }))).then((encoded) => {
+          vscode.postMessage({ version: 1, type: "sendFiles", conversationId: state.activeConversationId, text, confirmedRisky, files: encoded });
+        });
+      };
+      if (risky) {
+        ask("This file can run code if someone opens it. Send it only if you trust it.", "Send anyway", () => sendSelected(true));
+        return;
+      }
+      sendSelected(false);
+      if (box instanceof HTMLTextAreaElement) box.value = "";
+      return;
+    }
     if (!text) return;
     vscode.postMessage({ version: 1, type: "sendMessage", conversationId: state.activeConversationId, text });
     if (typingOn) {
@@ -1191,7 +1307,10 @@ export function createStateMessage(state: HostState): HostMessage {
     outgoingRequests: [...state.outgoingRequests],
     conversations: [...state.conversations],
     activeConversationId: state.activeConversationId,
-    messages: state.messages.map((message) => ({ ...message })),
+    messages: state.messages.map((message) => ({
+      ...message,
+      attachments: message.attachments?.map((file) => ({ ...file })),
+    })),
     notifications: [...state.notifications],
     unreadNotifications: state.unreadNotifications,
     unreadMessages: state.unreadMessages,

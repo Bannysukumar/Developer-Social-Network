@@ -5,11 +5,14 @@ import com.devconnect.socialnetwork.dto.response.MessageResponse;
 import com.devconnect.socialnetwork.entity.MessageEntity;
 import org.springframework.stereotype.Component;
 
+import java.util.List;
+
 @Component
 public class MessageMapper {
 
     public MessageResponse toResponse(MessageEntity message) {
         boolean cleared = message.isDeletedForEveryone();
+        List<String> attachments = message.getAttachmentIds() == null ? List.of() : List.copyOf(message.getAttachmentIds());
         return new MessageResponse(
                 message.getId(),
                 message.getConversationId(),
@@ -23,7 +26,8 @@ public class MessageMapper {
                 message.getCreatedAt(),
                 message.getDeliveredAt(),
                 message.getReadAt(),
-                message.isDeletedForEveryone()
+                message.isDeletedForEveryone(),
+                cleared ? List.of() : attachments
         );
     }
 

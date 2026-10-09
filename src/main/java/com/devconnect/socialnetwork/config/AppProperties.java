@@ -356,6 +356,8 @@ public class AppProperties {
     public static class Storage {
         private String location = "./uploads";
         private long maxImageBytes = 2_097_152L;
+        private long maxAttachmentBytes = 10_485_760L;
+        private int maxAttachmentsPerMessage = 10;
 
         public String getLocation() {
             return location;
@@ -371,6 +373,22 @@ public class AppProperties {
 
         public void setMaxImageBytes(long maxImageBytes) {
             this.maxImageBytes = maxImageBytes;
+        }
+
+        public long getMaxAttachmentBytes() {
+            return maxAttachmentBytes;
+        }
+
+        public void setMaxAttachmentBytes(long maxAttachmentBytes) {
+            this.maxAttachmentBytes = maxAttachmentBytes;
+        }
+
+        public int getMaxAttachmentsPerMessage() {
+            return maxAttachmentsPerMessage;
+        }
+
+        public void setMaxAttachmentsPerMessage(int maxAttachmentsPerMessage) {
+            this.maxAttachmentsPerMessage = maxAttachmentsPerMessage;
         }
     }
 

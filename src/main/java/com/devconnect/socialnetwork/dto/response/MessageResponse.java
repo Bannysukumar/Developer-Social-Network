@@ -4,6 +4,7 @@ import com.devconnect.socialnetwork.domain.MessageStatus;
 import com.devconnect.socialnetwork.domain.MessageType;
 
 import java.time.Instant;
+import java.util.List;
 
 public record MessageResponse(
         String id,
@@ -18,6 +19,7 @@ public record MessageResponse(
         Instant createdAt,
         Instant deliveredAt,
         Instant readAt,
-        boolean deletedForEveryone
+        boolean deletedForEveryone,
+        List<String> attachmentIds
 ) {
 }

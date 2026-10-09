@@ -7,7 +7,9 @@ import org.springframework.data.mongodb.core.index.CompoundIndex;
 import org.springframework.data.mongodb.core.mapping.Document;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Set;
 
 @Document(collection = "messages")
@@ -31,6 +33,7 @@ public class MessageEntity {
     private Instant readAt;
     private boolean deletedForEveryone;
     private Set<String> deletedForUserIds = new LinkedHashSet<>();
+    private List<String> attachmentIds = new ArrayList<>();
 
     public String getId() {
         return id;
@@ -150,5 +153,13 @@ public class MessageEntity {
 
     public void setDeletedForUserIds(Set<String> deletedForUserIds) {
         this.deletedForUserIds = deletedForUserIds;
+    }
+
+    public List<String> getAttachmentIds() {
+        return attachmentIds;
+    }
+
+    public void setAttachmentIds(List<String> attachmentIds) {
+        this.attachmentIds = attachmentIds;
     }
 }
