@@ -657,10 +657,10 @@ export function renderWebview(webview: Webview, state: HostState): string {
         <h1>Security</h1>
         <form id="recovery-form" class="stack">
           <p class="muted">Save a recovery passphrase on this installation before you reset the laptop, reinstall DevConnect, or sign in on another device. The passphrase encrypts this device's key. The server cannot read the key or your messages.</p>
-          <p class="muted">On this device: enter at least 10 characters, click Save recovery passphrase, and store that passphrase somewhere outside this laptop.</p>
+          <p class="muted">On this device: enter 10 characters, click Save recovery passphrase, and store that passphrase somewhere outside this laptop.</p>
           <p class="muted">On a new installation: sign in, open Settings, then Security, enter the same passphrase, and click Restore this device.</p>
           <p class="muted">If no passphrase was saved before an installation was wiped, messages sealed to that installation cannot be opened. A forgotten passphrase cannot be reset.</p>
-          <label class="field">Recovery passphrase<input name="passphrase" type="password" autocomplete="new-password" minlength="10"></label>
+          <label class="field">Recovery passphrase<input name="passphrase" type="password" autocomplete="new-password" required minlength="10" maxlength="10"></label>
           <div class="row">
             <button class="btn primary" type="submit" id="save-recovery">Save recovery passphrase</button>
             <button class="btn" type="button" id="restore-recovery">Restore this device</button>
@@ -674,7 +674,7 @@ export function renderWebview(webview: Webview, state: HostState): string {
         <button class="btn quiet" type="button" data-settings="menu">Settings</button>
         <h1>About</h1>
         <p>DevConnect</p>
-        <p class="muted" id="about-version">Version 0.4.50</p>
+        <p class="muted" id="about-version">Version 0.4.51</p>
         <p class="muted">A developer network inside Visual Studio Code. Messages stay encrypted on your devices.</p>
       </div>
     </section>

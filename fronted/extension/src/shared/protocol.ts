@@ -211,7 +211,7 @@ export const webviewMessageSchema = z.discriminatedUnion("type", [
   z.object({
     version: z.literal(1),
     type: z.literal("saveRecovery"),
-    passphrase: z.string().min(10).max(200),
+    passphrase: z.string().min(10).max(10),
   }).strict(),
   z.object({
     version: z.literal(1),
