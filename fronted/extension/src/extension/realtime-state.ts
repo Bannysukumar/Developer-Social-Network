@@ -118,13 +118,13 @@ export function applyNotificationRead<T extends { id: string; read: boolean }>(
   return { notifications: next, unreadCount: unread };
 }
 
-/** In-app toast for a message the open thread is already showing is redundant. Other notices stay. */
-export function acceptLiveToast(
-  note: { type: string; referenceId?: string | null },
-  screen: string,
-  activeConversationId: string | null,
-): boolean {
-  return !(note.type === "NEW_MESSAGE" && screen === "messages" && !!note.referenceId && note.referenceId === activeConversationId);
+/**
+ * Message popups are routed by the extension host so a WebView toast cannot
+ * compete with the in-editor notice or the native desktop toast.
+ * Friend-request notices still use the in-view toast.
+ */
+export function acceptLiveToast(note: { type: string }): boolean {
+  return note.type !== "NEW_MESSAGE";
 }
 
 export function mergeNotification(

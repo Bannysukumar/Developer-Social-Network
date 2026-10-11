@@ -257,7 +257,7 @@ export class SessionFlow {
     const patch = mergeNotification(this.notifications, note, this.unreadNotifications, this.toastSeq);
     if (patch.notifications) this.notifications = patch.notifications;
     if (patch.unreadNotifications !== undefined) this.unreadNotifications = patch.unreadNotifications;
-    if (patch.toast && acceptLiveToast(note, this.screen, this.activeConversationId)) {
+    if (patch.toast && acceptLiveToast(note)) {
       this.toast = patch.toast;
       this.toastSeq = patch.toastSeq ?? this.toastSeq;
     }

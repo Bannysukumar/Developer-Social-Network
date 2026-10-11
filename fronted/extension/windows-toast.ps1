@@ -1,29 +1,39 @@
-# Shows one Windows toast for an unpackaged DevConnect notifier.
-# Requires a Start Menu shortcut whose AppUserModelID matches the notifier id.
+# One Windows toast for an unpackaged DevConnect notifier.
+# Desktop (unpackaged) toasts require a Start Menu shortcut whose
+# System.AppUserModel.ID matches the id passed to CreateToastNotifier.
+# The shortcut is created once per target executable and kept in the user Start Menu.
 $ErrorActionPreference = "Stop"
 $AppId = "DevConnect.Notifier"
 $title = $env:DC_NOTICE_TITLE
 $body = $env:DC_NOTICE_BODY
 $launch = $env:DC_NOTICE_LAUNCH
 if ([string]::IsNullOrWhiteSpace($title)) { $title = "DevConnect" }
-if ([string]::IsNullOrWhiteSpace($body)) { throw "DC_NOTICE_BODY is empty" }
-
-function Escape-Xml([string]$value) {
-  if ($null -eq $value) { return "" }
-  return ($value -replace '&', '&amp;' -replace '<', '&lt;' -replace '>', '&gt;' -replace '"', '&quot;')
+if ([string]::IsNullOrWhiteSpace($body)) {
+  Write-Output "TOAST_REJECTED empty-body"
+  exit 2
 }
+if ($null -eq $launch) { $launch = "" }
 
-$shortcutPath = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\DevConnect.lnk"
+$programs = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs"
+$shortcutPath = Join-Path $programs "DevConnect.lnk"
 $target = $env:DC_NOTICE_TARGET
-if ([string]::IsNullOrWhiteSpace($target)) { $target = "$env:SystemRoot\explorer.exe" }
-$shell = New-Object -ComObject WScript.Shell
-$shortcut = $shell.CreateShortcut($shortcutPath)
-$shortcut.TargetPath = $target
-$shortcut.WindowStyle = 7
-$shortcut.Description = "DevConnect notifications"
-$shortcut.Save()
+if ([string]::IsNullOrWhiteSpace($target)) { $target = Join-Path $env:SystemRoot "explorer.exe" }
+$stampDir = Join-Path $env:LOCALAPPDATA "DevConnect"
+$stampPath = Join-Path $stampDir "notifier-shortcut.txt"
+$registered = (Test-Path -LiteralPath $shortcutPath) -and (Test-Path -LiteralPath $stampPath) -and ((Get-Content -LiteralPath $stampPath -Raw).Trim() -eq $target)
 
-Add-Type -TypeDefinition @"
+if (-not $registered) {
+  New-Item -ItemType Directory -Force -Path $programs | Out-Null
+  New-Item -ItemType Directory -Force -Path $stampDir | Out-Null
+  $shell = New-Object -ComObject WScript.Shell
+  $shortcut = $shell.CreateShortcut($shortcutPath)
+  $shortcut.TargetPath = $target
+  $shortcut.WindowStyle = 7
+  $shortcut.Description = "DevConnect notifications"
+  $shortcut.Save()
+
+  if (-not ("DevConnectAumid" -as [type])) {
+    Add-Type -TypeDefinition @"
 using System;
 using System.Runtime.InteropServices;
 public static class DevConnectAumid {
@@ -65,28 +75,29 @@ public static class DevConnectAumid {
   }
 }
 "@
-[DevConnectAumid]::Set($shortcutPath, $AppId)
+  }
+  [DevConnectAumid]::Set($shortcutPath, $AppId)
+  Set-Content -LiteralPath $stampPath -Value $target -Encoding utf8
+}
 
 $null = [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]
-$null = [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime]
-$safeTitle = Escape-Xml $title
-$safeBody = Escape-Xml $body
-$safeLaunch = Escape-Xml $launch
-$xmlText = @"
-<toast activationType="protocol" launch="$safeLaunch">
-  <visual>
-    <binding template="ToastGeneric">
-      <text>$safeTitle</text>
-      <text>$safeBody</text>
-    </binding>
-  </visual>
-</toast>
-"@
+$null = [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom, ContentType = WindowsRuntime]
 $xml = New-Object Windows.Data.Xml.Dom.XmlDocument
-$xml.LoadXml($xmlText)
+$xml.LoadXml('<toast activationType="protocol"><visual><binding template="ToastGeneric"><text></text><text></text></binding></visual></toast>')
+$xml.DocumentElement.SetAttribute("launch", $launch)
+$texts = $xml.GetElementsByTagName("text")
+$texts.Item(0).InnerText = $title
+$texts.Item(1).InnerText = $body
 $toast = [Windows.UI.Notifications.ToastNotification]::new($xml)
 $toast.Tag = "DevConnect"
 $toast.Group = "DevConnect"
 $notifier = [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($AppId)
+$setting = [string]$notifier.Setting
+if ($setting -ne "Enabled") {
+  Write-Output "TOAST_REJECTED $setting"
+  exit 2
+}
 $notifier.Show($toast)
+[Console]::Out.Flush()
 Write-Output "TOAST_SHOWN"
+exit 0

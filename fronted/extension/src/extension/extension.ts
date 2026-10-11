@@ -5,8 +5,8 @@ import { createApiConfig } from "../api/config";
 import type { ScreenId } from "../shared/flow";
 import { AuthService } from "./auth-service";
 import { chatSocketUrl, messageFromFrame, NodeChatSocket, notificationFromFrame } from "./chat-socket";
-import { decideNotificationNotice, decideStoredNotice, isActivelyReading, noticeChannel, noticeLaunchUri, resolveMessageNotice, unreadMessageNotificationId, windowInForeground, type NoticePrefs, type NoticeTarget, type ReadingContext } from "./desktop-notice";
-import { showBackgroundNotice } from "./os-notice";
+import { decideNotificationNotice, decideStoredNotice, isActivelyReading, noticeChannel, noticeLaunchUri, resolveMessageNotice, unreadMessageNotificationId, windowInForeground, type NoticeChannel, type NoticePrefs, type NoticeTarget, type ReadingContext } from "./desktop-notice";
+import { shouldUseEditorFallback, showBackgroundNotice, windowsToastScriptPath } from "./os-notice";
 import { SessionFlow } from "./session-flow";
 import { createStateMessage, renderWebview } from "./webview";
 
@@ -23,6 +23,8 @@ class DevConnectHost implements vscode.WebviewViewProvider, vscode.Disposable {
   private reportedConversationId: string | null = null;
   private webviewDocumentVisible = false;
   private webviewFocused = false;
+  private windowFocused = false;
+  private windowActive: boolean | undefined;
   private readonly statusBar: vscode.StatusBarItem;
 
   constructor(
@@ -33,6 +35,7 @@ class DevConnectHost implements vscode.WebviewViewProvider, vscode.Disposable {
   ) {
     this.statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 0);
     this.statusBar.command = "devconnect.open";
+    this.noteWindowState(vscode.window.state as { focused: boolean; active?: boolean });
     this.flow = new SessionFlow(auth, () => {
       if (!this.flow.snapshot().authenticated) this.clearViewing();
       this.pushState();
@@ -221,7 +224,7 @@ class DevConnectHost implements vscode.WebviewViewProvider, vscode.Disposable {
       })();
     if (!target) {
       for (const id of decision?.rememberIds ?? []) this.rememberNotice(id);
-      this.output.appendLine(`notice suppressed id=${message?.id ?? "notification"} focused=${vscode.window.state.focused} active=${this.windowIsForeground()} viewVisible=${this.view?.visible === true}`);
+      this.output.appendLine(`notice suppressed id=${message?.id ?? "notification"} channel=${decision?.channel ?? "none"} foreground=${this.windowIsForeground()} viewVisible=${this.view?.visible === true}`);
       this.dropNotice(noticeSlot);
       return;
     }
@@ -231,16 +234,18 @@ class DevConnectHost implements vscode.WebviewViewProvider, vscode.Disposable {
         return;
       }
     }
-    await this.presentNotice(target);
+    const channel = decision?.channel === "editor" || decision?.channel === "desktop"
+      ? decision.channel
+      : noticeChannel(this.windowIsForeground());
+    await this.presentNotice(target, channel);
     this.dropNotice(noticeSlot);
   }
 
   private readingContext(): ReadingContext {
-    const state = vscode.window.state as { focused: boolean; active?: boolean };
     const snap = this.flow.snapshot();
     return {
-      windowFocused: state.focused,
-      windowActive: state.active,
+      windowFocused: this.windowFocused,
+      windowActive: this.windowActive,
       viewVisible: this.view?.visible === true,
       screen: snap.screen,
       activeConversationId: snap.screen === "messages" ? snap.activeConversationId : null,
@@ -248,6 +253,21 @@ class DevConnectHost implements vscode.WebviewViewProvider, vscode.Disposable {
       webviewDocumentVisible: this.webviewDocumentVisible,
       webviewFocused: this.webviewFocused,
     };
+  }
+
+  /** Foreground comes from VS Code window state, not from webview DOM focus. */
+  noteWindowState(state: { focused: boolean; active?: boolean }): void {
+    const wasForeground = windowInForeground(this.windowFocused, this.windowActive);
+    this.windowFocused = state.focused;
+    this.windowActive = state.active;
+    const foreground = windowInForeground(state.focused, state.active);
+    if (!foreground) {
+      this.webviewDocumentVisible = false;
+      return;
+    }
+    if (!wasForeground && this.view?.visible === true && this.reportedConversationId) {
+      this.webviewDocumentVisible = true;
+    }
   }
 
   private clearViewing(): void {
@@ -266,22 +286,21 @@ class DevConnectHost implements vscode.WebviewViewProvider, vscode.Disposable {
   }
 
   private windowIsForeground(): boolean {
-    const state = vscode.window.state as { focused: boolean; active?: boolean };
-    return windowInForeground(state.focused, state.active, this.webviewFocused);
+    return windowInForeground(this.windowFocused, this.windowActive);
   }
 
-  private async presentNotice(target: NoticeTarget): Promise<void> {
+  private async presentNotice(target: NoticeTarget, channel: Exclude<NoticeChannel, "none">): Promise<void> {
     if (!this.rememberNotice(target.id)) {
       this.output.appendLine(`notice duplicate id=${target.id}`);
       return;
     }
-    const foreground = this.windowIsForeground();
-    this.output.appendLine(`notice show id=${target.id} action=${target.action} foreground=${foreground} viewVisible=${this.view?.visible === true}`);
-    if (noticeChannel(foreground) === "desktop") {
+    this.output.appendLine(`notice show id=${target.id} channel=${channel} viewVisible=${this.view?.visible === true}`);
+    if (channel === "desktop") {
       const launch = noticeLaunchUri("Bannysukumar2255", "devconnect-vscode-extension", target);
       const toast = await showBackgroundNotice(this.toastScript, target.body, launch);
-      this.output.appendLine(`windows toast ok=${toast.ok} detail=${toast.detail}`);
-      return;
+      this.output.appendLine(`windows toast ok=${toast.ok} submitted=${toast.submitted} detail=${toast.detail}`);
+      if (!shouldUseEditorFallback(toast)) return;
+      this.output.appendLine("notice fallback=editor reason=native-toast-not-submitted");
     }
     const choice = await vscode.window.showInformationMessage(target.body, target.action);
     if (choice !== target.action || this.openingNotice) return;
@@ -326,7 +345,7 @@ class DevConnectHost implements vscode.WebviewViewProvider, vscode.Disposable {
         const reading = note.referenceId ? isActivelyReading(this.readingContext(), note.referenceId) : false;
         const target = decideStoredNotice(note, prefs, this.seenNotices, reading);
         if (!target && reading && note.type === "NEW_MESSAGE") this.rememberNotice(note.id);
-        if (target) await this.presentNotice(target);
+        if (target) await this.presentNotice(target, noticeChannel(this.windowIsForeground()));
       }
     } catch {
       // A failed list does not end the session. The socket remains the live source.
@@ -428,7 +447,7 @@ export function activate(context: vscode.ExtensionContext): void {
   }
 
   const output = vscode.window.createOutputChannel("DevConnect");
-  const host = new DevConnectHost(auth, join(context.globalStorageUri.fsPath, "notices"), join(context.extensionUri.fsPath, "windows-toast.ps1"), output);
+  const host = new DevConnectHost(auth, join(context.globalStorageUri.fsPath, "notices"), windowsToastScriptPath(context.extensionUri.fsPath), output);
   context.subscriptions.push(output, vscode.window.registerUriHandler({
     handleUri(uri) {
       host.openFromNotice(uri);
@@ -447,6 +466,9 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("devconnect.markNotificationsRead", () => host.markAllRead()),
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (event.affectsConfiguration("devconnect")) host.reloadConfig();
+    }),
+    vscode.window.onDidChangeWindowState((state) => {
+      host.noteWindowState(state);
     }),
   );
   void host.start();

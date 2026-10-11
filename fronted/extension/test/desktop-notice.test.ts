@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { decideMessageNotice, decideNotificationNotice, decideStoredNotice, isActivelyReading, noticeChannel, noticeLaunchUri, resolveMessageNotice, unreadMessageNotificationId, type ReadingContext } from "../src/extension/desktop-notice";
+import { decideMessageNotice, decideNotificationNotice, decideStoredNotice, isActivelyReading, noticeChannel, noticeLaunchUri, resolveMessageNotice, routeNotice, unreadMessageNotificationId, windowInForeground, type ReadingContext } from "../src/extension/desktop-notice";
 import { acceptLiveToast, mergeLiveMessage, mergeReceipt } from "../src/extension/realtime-state";
 
 const prefs = { messages: true, friendRequests: true, friendAccepted: true };
@@ -120,6 +120,14 @@ describe("desktop notices", () => {
     expect(isActivelyReading(open, "c2")).toBe(false);
     expect(noticeChannel(true)).toBe("editor");
     expect(noticeChannel(false)).toBe("desktop");
+    expect(routeNotice(true, true)).toBe("none");
+    expect(routeNotice(true, false)).toBe("none");
+    expect(routeNotice(false, true)).toBe("editor");
+    expect(routeNotice(false, false)).toBe("desktop");
+    expect(windowInForeground(false, true)).toBe(true);
+    expect(windowInForeground(false, false)).toBe(false);
+    expect(windowInForeground(false, undefined)).toBe(false);
+    expect(windowInForeground(true, undefined)).toBe(true);
     const prefs = { messages: true, friendRequests: true, friendAccepted: true };
     const stored = decideStoredNotice({
       id: "n9",
@@ -165,11 +173,39 @@ describe("desktop notices", () => {
     expect(isActivelyReading(switching, "c2")).toBe(false);
     const hidden = reading({ viewVisible: false, webviewDocumentVisible: false });
     expect(noticeFor("c1", "m-e", hidden, seen)).not.toBeNull();
-    const background = reading({ windowFocused: false, windowActive: false, webviewFocused: false });
+    const background = reading({ windowFocused: false, windowActive: false, webviewFocused: true });
     expect(noticeFor("c1", "m-f", background, seen)).not.toBeNull();
-    expect(noticeChannel(false)).toBe("desktop");
-    const webviewFocus = reading({ windowFocused: false, windowActive: undefined, webviewFocused: true });
-    expect(noticeFor("c1", "m-g", webviewFocus, seen)).toBeNull();
+    expect(resolveMessageNotice({
+      messageId: "m-f2",
+      conversationId: "c1",
+      senderIsSelf: false,
+      senderBlocked: false,
+      reading: background,
+      prefs,
+      seen,
+    }).channel).toBe("desktop");
+    const webviewInsideForeground = reading({ windowFocused: false, windowActive: true, webviewFocused: true });
+    expect(noticeFor("c1", "m-g", webviewInsideForeground, seen)).toBeNull();
+    const otherWhileAway = reading({ windowFocused: false, windowActive: false, activeConversationId: "c1", reportedConversationId: "c1" });
+    expect(resolveMessageNotice({
+      messageId: "m-b-away",
+      conversationId: "c2",
+      senderIsSelf: false,
+      senderBlocked: false,
+      reading: otherWhileAway,
+      prefs,
+      seen,
+    }).channel).toBe("desktop");
+    const friends = reading({ screen: "friends", activeConversationId: null, reportedConversationId: null, windowFocused: true, windowActive: true });
+    expect(resolveMessageNotice({
+      messageId: "m-friends",
+      conversationId: "c1",
+      senderIsSelf: false,
+      senderBlocked: false,
+      reading: friends,
+      prefs,
+      seen,
+    }).channel).toBe("editor");
   });
 
   test("shows one notice when the same message arrives twice, then allows a later message", () => {
@@ -231,7 +267,7 @@ describe("desktop notices", () => {
     expect(read?.[0]?.status).toBe("READ");
     expect(noticeFor("c1", "m1", reading(), new Set())).toBeNull();
     expect(acceptLiveToast({ type: "NEW_MESSAGE", referenceId: "c1" }, "messages", "c1")).toBe(false);
-    expect(acceptLiveToast({ type: "NEW_MESSAGE", referenceId: "c2" }, "messages", "c1")).toBe(true);
+    expect(acceptLiveToast({ type: "NEW_MESSAGE", referenceId: "c2" }, "messages", "c1")).toBe(false);
     expect(acceptLiveToast({ type: "FRIEND_REQUEST", referenceId: "c1" }, "messages", "c1")).toBe(true);
   });
 });

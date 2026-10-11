@@ -38,25 +38,27 @@ export function unreadMessageNotificationId(
   return notifications.find((note) => note.type === "NEW_MESSAGE" && !note.read && note.referenceId === conversationId)?.id;
 }
 
-/** Focused windows use the in-editor notice. Background windows use one Windows toast. */
-export function noticeChannel(windowForeground: boolean): "desktop" | "editor" {
+/** One channel per message. `editor` is a VS Code popup. `desktop` is a native OS toast. */
+export type NoticeChannel = "none" | "editor" | "desktop";
+
+/** Foreground windows use the in-editor notice. Background windows use one native toast. */
+export function noticeChannel(windowForeground: boolean): Exclude<NoticeChannel, "none"> {
   return windowForeground ? "editor" : "desktop";
 }
 
 /**
- * Whether this VS Code window is the foreground window.
- * A focused webview clears `focused` while `active` stays true.
- * Older builds omit `active`; those fall back to `focused`.
+ * Whether this VS Code window is the foreground application.
+ * `active` stays true when a webview inside this window has focus.
+ * Webview DOM focus is not a foreground signal. Older builds omit `active` and fall back to `focused`.
  */
-export function windowInForeground(
-  windowFocused: boolean,
-  windowActive: boolean | undefined,
-  webviewFocused = false,
-): boolean {
-  // `active` stays true when a webview inside this window has focus.
-  // `webviewFocused` covers builds that only clear `focused` and omit `active`.
-  if (windowActive === true || windowFocused) return true;
-  return webviewFocused;
+export function windowInForeground(windowFocused: boolean, windowActive: boolean | undefined): boolean {
+  return typeof windowActive === "boolean" ? windowActive : windowFocused;
+}
+
+/** None while that thread is on screen. Otherwise exactly one channel. */
+export function routeNotice(conversationOnScreen: boolean, vscodeForeground: boolean): NoticeChannel {
+  if (conversationOnScreen) return "none";
+  return noticeChannel(vscodeForeground);
 }
 
 /** Live signals for the one conversation whose thread is actually on screen. */
@@ -74,11 +76,12 @@ export interface ReadingContext {
 }
 
 /**
- * True only when that conversation's thread is the one the user can see.
+ * True only when that conversation's thread is on screen in the foreground VS Code window.
  * A selected id, a hidden sidebar, or a background window does not count.
+ * Webview DOM focus is ignored here; foreground comes from the window state.
  */
 export function isActivelyReading(reading: ReadingContext, conversationId: string): boolean {
-  if (!conversationId || !windowInForeground(reading.windowFocused, reading.windowActive, reading.webviewFocused)) return false;
+  if (!conversationId || !windowInForeground(reading.windowFocused, reading.windowActive)) return false;
   if (!reading.viewVisible || !reading.webviewDocumentVisible) return false;
   if (reading.screen !== "messages") return false;
   if (reading.activeConversationId !== conversationId) return false;
@@ -98,34 +101,37 @@ export interface MessageNoticeInput {
 }
 
 export interface MessageNoticeDecision {
+  readonly channel: NoticeChannel;
   readonly target: NoticeTarget | null;
   /** Ids to remember when the notice is suppressed because the thread is already on screen. */
   readonly rememberIds: readonly string[];
 }
 
-/** One desktop notice decision for an incoming message. Recording is separate from delivery. */
+/** One routing decision for an incoming message. Recording is separate from delivery. */
 export function resolveMessageNotice(input: MessageNoticeInput): MessageNoticeDecision {
-  if (input.senderBlocked || input.senderIsSelf) return { target: null, rememberIds: [] };
+  const none = (rememberIds: readonly string[] = []): MessageNoticeDecision => ({ channel: "none", target: null, rememberIds });
+  if (input.senderBlocked || input.senderIsSelf) return none();
   if (input.seen.has(input.messageId) || (input.notificationId !== undefined && input.seen.has(input.notificationId))) {
-    return { target: null, rememberIds: [] };
+    return none();
   }
   const viewing = isActivelyReading(input.reading, input.conversationId);
+  const channel = routeNotice(viewing, windowInForeground(input.reading.windowFocused, input.reading.windowActive));
+  if (channel === "none") {
+    return none(input.notificationId ? [input.messageId, input.notificationId] : [input.messageId]);
+  }
+  if (!input.prefs.messages) return none();
   const target = decideMessageNotice(
     input.messageId,
     input.conversationId,
     false,
-    viewing,
+    false,
     input.prefs,
     input.seen,
     input.senderLabel ?? "Someone",
     input.notificationId,
   );
-  if (target) return { target, rememberIds: input.notificationId ? [input.notificationId] : [] };
-  if (!viewing) return { target: null, rememberIds: [] };
-  return {
-    target: null,
-    rememberIds: input.notificationId ? [input.messageId, input.notificationId] : [input.messageId],
-  };
+  if (!target) return none();
+  return { channel, target, rememberIds: input.notificationId ? [input.notificationId] : [] };
 }
 
 export function decideStoredNotice(
