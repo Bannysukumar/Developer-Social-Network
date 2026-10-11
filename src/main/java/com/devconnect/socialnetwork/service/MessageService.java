@@ -207,7 +207,8 @@ public class MessageService {
                     response.deliveredAt(),
                     response.readAt(),
                     response.deletedForEveryone(),
-                    response.attachmentIds()
+                    response.attachmentIds(),
+                    response.reactions()
             );
         }).toList(), next, hasNext);
     }

@@ -8,9 +8,11 @@ import {
   createConversationRequestSchema,
   messageSchema,
   pageSchema,
+  reactionSnapshotSchema,
   sendMessageRequestSchema,
   type ConversationDto,
   type MessageDto,
+  type ReactionSnapshotDto,
   type SendMessageRequestDto,
 } from "../shared/api-types";
 
@@ -121,6 +123,22 @@ export class ConversationsApi {
 
   markRead(messageId: string): Promise<unknown> {
     return this.client.request(`messages/${pathId(messageId)}/read`, undefined, { method: "PATCH" });
+  }
+
+  setReaction(conversationId: string, messageId: string, emoji: string): Promise<ReactionSnapshotDto> {
+    return this.client.request(
+      `conversations/${pathId(conversationId)}/messages/${pathId(messageId)}/reaction`,
+      reactionSnapshotSchema,
+      { method: "PUT", body: { emoji } },
+    );
+  }
+
+  clearReaction(conversationId: string, messageId: string): Promise<ReactionSnapshotDto> {
+    return this.client.request(
+      `conversations/${pathId(conversationId)}/messages/${pathId(messageId)}/reaction`,
+      reactionSnapshotSchema,
+      { method: "DELETE" },
+    );
   }
 
   deleteMessage(messageId: string, scope: "me" | "everyone" = "me"): Promise<MessageDto> {

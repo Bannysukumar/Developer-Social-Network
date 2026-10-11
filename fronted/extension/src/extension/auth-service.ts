@@ -27,6 +27,9 @@ import { openKeyBackup, sealKeyBackup } from "./crypto/key-backup";
 import { decryptMessage, encryptForDevices, isEncryptedEnvelope, SEALED_MESSAGE_TEXT, type RecipientBundle } from "./crypto/message-cipher";
 import { openFile, sealFile } from "./crypto/file-cipher";
 import { encodeFilePayload, parseFilePayload, type SharedFile } from "./crypto/file-payload";
+import { encodeMediaPayload, parseMediaPayload, type MediaPayload } from "./crypto/media-payload";
+import { gifById, isAllowedReaction, stickerById } from "./media-catalog";
+import type { ReactionSnapshotDto } from "../shared/api-types";
 import { decodeOpaqueText } from "../shared/payload";
 import { SessionStore } from "./session";
 
@@ -35,6 +38,7 @@ export interface DisplayMessage extends MessageDto {
   readonly sendState?: "failed" | "sending";
   readonly sendError?: string;
   readonly attachments?: readonly SharedFile[];
+  readonly media?: MediaPayload;
 }
 
 export interface AuthServiceOptions {
@@ -460,6 +464,41 @@ export class AuthService {
     return this.displayMessage(message);
   }
 
+  async sendMedia(conversationId: string, kind: "sticker" | "gif", id: string): Promise<DisplayMessage> {
+    await this.ensureDeviceKeys();
+    const keys = this.deviceKeys;
+    if (!keys?.deviceId) {
+      throw new ApiError("configuration", "This device is not registered.");
+    }
+    const conversation = await this.conversationsApi.get(conversationId);
+    const selfId = this.getUser()?.id;
+    const recipientId = conversation.participantIds.find((item) => item !== selfId);
+    if (!recipientId) {
+      throw new ApiError("request", "Choose a friend or conversation first.");
+    }
+    const bundle = await this.keysApi.bundle(recipientId);
+    const recipients = this.pickRecipients(bundle.devices);
+    const message = await this.conversationsApi.sendMessage(conversationId, {
+      ciphertext: encryptForDevices(encodeMediaPayload(kind, id), conversationId, keys, recipients),
+      messageType: "TEXT",
+      clientMessageId: `ext-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+      deviceId: keys.deviceId,
+      keyId: String(recipients[0]?.oneTimePreKey?.preKeyId ?? recipients[0]?.signedPreKey.preKeyId ?? ""),
+    });
+    return this.displayMessage(message);
+  }
+
+  setReaction(conversationId: string, messageId: string, emoji: string): Promise<ReactionSnapshotDto> {
+    if (!isAllowedReaction(emoji)) {
+      return Promise.reject(new ApiError("request", "Choose one of the available reactions."));
+    }
+    return this.conversationsApi.setReaction(conversationId, messageId, emoji);
+  }
+
+  clearReaction(conversationId: string, messageId: string): Promise<ReactionSnapshotDto> {
+    return this.conversationsApi.clearReaction(conversationId, messageId);
+  }
+
   async sendFiles(
     conversationId: string,
     text: string,
@@ -574,7 +613,7 @@ export class AuthService {
     if (error instanceof Error && error.message.includes("must use HTTPS")) {
       return error.message;
     }
-    if (error instanceof Error && /DevConnect API|Invalid user id|encryption key|key signature|not registered|Profile picture|You can't interact|File size|Too many files|file could not be opened/.test(error.message)) {
+    if (error instanceof Error && /DevConnect API|Invalid user id|encryption key|key signature|not registered|Profile picture|You can't interact|File size|Too many files|file could not be opened|not available|available reactions/.test(error.message)) {
       return error.message;
     }
     return "Something went wrong. Try again.";
@@ -594,6 +633,7 @@ export class AuthService {
       displayText: described.displayText,
       attachments: described.attachments,
       sealed: described.sealed,
+      media: described.media,
     };
   }
 
@@ -605,11 +645,16 @@ export class AuthService {
     }
   }
 
-  private describeMessage(message: MessageDto): { displayText: string; attachments?: readonly SharedFile[]; sealed?: boolean } {
+  private describeMessage(message: MessageDto): { displayText: string; attachments?: readonly SharedFile[]; sealed?: boolean; media?: MediaPayload } {
     if (message.deletedForEveryone) return { displayText: "This message was deleted" };
     const ciphertext = message.ciphertext ?? "";
     const decrypted = decryptMessage(ciphertext, this.deviceKeys);
     if (decrypted !== undefined) {
+      const media = parseMediaPayload(decrypted);
+      if (media) {
+        const named = media.kind === "sticker" ? stickerById(media.id)?.name : gifById(media.id)?.name;
+        return { displayText: named || (media.kind === "sticker" ? "Sticker" : "GIF"), media };
+      }
       const payload = parseFilePayload(decrypted);
       if (payload) {
         const caption = payload.text.trim();

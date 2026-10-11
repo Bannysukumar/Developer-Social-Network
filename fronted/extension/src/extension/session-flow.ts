@@ -3,7 +3,8 @@ import { ApiError, isAuthenticationFailure } from "../api/errors";
 import { notificationDestination, resolveScreen, type ScreenId } from "../shared/flow";
 import { webviewMessageSchema } from "../shared/protocol";
 import type { AuthService } from "./auth-service";
-import { messageFromFrame, notificationFromFrame, presenceFromFrame, typingFromFrame, type ServerFrame, type SocketStatus } from "./chat-socket";
+import { messageFromFrame, notificationFromFrame, presenceFromFrame, reactionFromFrame, typingFromFrame, type ServerFrame, type SocketStatus } from "./chat-socket";
+import { applyUserReaction } from "./reaction-state";
 import { mergePresence } from "./presence-state";
 import { absorbServerNotifications, acceptLiveToast, applyNotificationRead, applyTombstone, mergeHistory, mergeLiveMessage, mergeNotification, mergeReceipt, unreadMessageNotificationsForConversation } from "./realtime-state";
 import { isRiskyFile } from "./crypto/file-payload";
@@ -302,6 +303,16 @@ export class SessionFlow {
   }
 
   ingestFrame(frame: ServerFrame): void {
+    const reaction = reactionFromFrame(frame);
+    if (reaction) {
+      this.messages = this.messages.map((item) => item.id === reaction.messageId ? { ...item, reactions: reaction.items } : item);
+      const cached = this.historyCache.get(reaction.conversationId);
+      if (cached) {
+        cached.messages = cached.messages.map((item) => item.id === reaction.messageId ? { ...item, reactions: reaction.items } : item);
+      }
+      this.pushState();
+      return;
+    }
     if (frame.type === "PRESENCE_CLEAR" || frame.type === "BLOCK_STATE") {
       void this.applyBlockFrame(frame);
       return;
@@ -981,6 +992,59 @@ export class SessionFlow {
             this.messages = this.messages.map((item) => item.id === message.messageId ? updated : item);
           }
           this.pushState();
+          break;
+        }
+        case "sendMedia": {
+          if (this.messageLock !== "none") {
+            this.error = this.messageLock === "blocked-by-me" ? "You blocked this user." : "You can't message this user.";
+            break;
+          }
+          const localId = `local-${Date.now()}`;
+          const label = message.kind === "sticker" ? "Sticker" : "GIF";
+          this.messages = [{
+            id: localId,
+            conversationId: message.conversationId,
+            senderId: this.auth.getUser()?.id ?? "me",
+            recipientId: this.peerId() ?? "peer",
+            ciphertext: "",
+            messageType: "TEXT",
+            status: "SENT",
+            displayText: label,
+            media: { kind: message.kind, id: message.id },
+            sendState: "sending",
+          }, ...this.messages];
+          this.pushState();
+          try {
+            const sent = await this.auth.sendMedia(message.conversationId, message.kind, message.id);
+            this.seenMessageIds.add(sent.id);
+            this.messages = [sent, ...this.messages.filter((item) => item.id !== sent.id && item.id !== localId)];
+            this.rememberPreview(message.conversationId, sent.displayText);
+          } catch (error) {
+            this.messages = this.messages.filter((item) => item.id !== localId);
+            this.error = this.auth.userFacingError(error);
+          }
+          break;
+        }
+        case "setReaction":
+        case "clearReaction": {
+          const current = this.messages.find((item) => item.id === message.messageId);
+          if (!current) break;
+          const selfId = this.auth.getUser()?.id;
+          if (!selfId) break;
+          const previous = current.reactions ?? [];
+          const emoji = message.type === "setReaction" ? message.emoji : null;
+          const next = applyUserReaction(previous, selfId, emoji);
+          this.messages = this.messages.map((item) => item.id === current.id ? { ...item, reactions: next } : item);
+          this.pushState();
+          try {
+            const saved = message.type === "setReaction"
+              ? await this.auth.setReaction(current.conversationId, current.id, message.emoji)
+              : await this.auth.clearReaction(current.conversationId, current.id);
+            this.messages = this.messages.map((item) => item.id === saved.messageId ? { ...item, reactions: saved.items } : item);
+          } catch (error) {
+            this.messages = this.messages.map((item) => item.id === current.id ? { ...item, reactions: previous } : item);
+            this.error = this.auth.userFacingError(error);
+          }
           break;
         }
         case "sendMessage": {

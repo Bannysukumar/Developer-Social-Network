@@ -11,6 +11,7 @@ import com.devconnect.socialnetwork.dto.response.MessageResponse;
 import com.devconnect.socialnetwork.security.SecurityUtils;
 import com.devconnect.socialnetwork.service.ConversationService;
 import com.devconnect.socialnetwork.service.MessageService;
+import com.devconnect.socialnetwork.service.ReactionService;
 import com.devconnect.socialnetwork.util.ApiResponses;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -35,10 +36,16 @@ public class ConversationController {
 
     private final ConversationService conversationService;
     private final MessageService messageService;
+    private final ReactionService reactionService;
 
-    public ConversationController(ConversationService conversationService, MessageService messageService) {
+    public ConversationController(
+            ConversationService conversationService,
+            MessageService messageService,
+            ReactionService reactionService
+    ) {
         this.conversationService = conversationService;
         this.messageService = messageService;
+        this.reactionService = reactionService;
     }
 
     @PostMapping
@@ -70,7 +77,10 @@ public class ConversationController {
             @RequestParam(required = false) String cursor,
             @RequestParam(defaultValue = "30") @Min(1) @Max(50) int limit
     ) {
-        return ApiResponses.ok("Messages retrieved", messageService.list(SecurityUtils.currentUserId(), conversationId, cursor, limit));
+        return ApiResponses.ok(
+                "Messages retrieved",
+                reactionService.withReactions(messageService.list(SecurityUtils.currentUserId(), conversationId, cursor, limit))
+        );
     }
 
     @PostMapping("/{conversationId}/read")

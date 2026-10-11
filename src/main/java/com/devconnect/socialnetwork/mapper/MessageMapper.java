@@ -27,7 +27,8 @@ public class MessageMapper {
                 message.getDeliveredAt(),
                 message.getReadAt(),
                 message.isDeletedForEveryone(),
-                cleared ? List.of() : attachments
+                cleared ? List.of() : attachments,
+                List.of()
         );
     }
 

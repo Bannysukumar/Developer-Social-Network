@@ -145,6 +145,24 @@ export const webviewMessageSchema = z.discriminatedUnion("type", [
   }).strict(),
   z.object({
     version: z.literal(1),
+    type: z.literal("sendMedia"),
+    conversationId: z.string().min(1),
+    kind: z.enum(["sticker", "gif"]),
+    id: z.string().min(1).max(32),
+  }).strict(),
+  z.object({
+    version: z.literal(1),
+    type: z.literal("setReaction"),
+    messageId: z.string().min(1),
+    emoji: z.string().min(1).max(8),
+  }).strict(),
+  z.object({
+    version: z.literal(1),
+    type: z.literal("clearReaction"),
+    messageId: z.string().min(1),
+  }).strict(),
+  z.object({
+    version: z.literal(1),
     type: z.literal("sendFiles"),
     conversationId: z.string().min(1),
     text: z.string().max(4000).optional(),
@@ -244,6 +262,10 @@ const displayMessageSchema = messageSchema.extend({
     loadError: z.boolean().optional(),
     loadDetail: z.string().max(120).optional(),
   })).optional(),
+  media: z.object({
+    kind: z.enum(["sticker", "gif"]),
+    id: z.string(),
+  }).optional(),
 });
 
 export const hostMessageSchema = z.object({

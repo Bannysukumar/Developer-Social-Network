@@ -151,6 +151,10 @@ export const messageSchema = z.object({
   readAt: z.string().nullable().optional(),
   deletedForEveryone: z.boolean().optional(),
   attachmentIds: z.array(z.string()).nullable().optional(),
+  reactions: z.array(z.object({
+    userId: z.string().min(1),
+    emoji: z.string().min(1).max(8),
+  })).optional(),
 }).passthrough();
 
 export type MessageDto = z.infer<typeof messageSchema>;
@@ -169,6 +173,17 @@ export const sendMessageRequestSchema = z.object({
 }).strict();
 
 export type SendMessageRequestDto = z.infer<typeof sendMessageRequestSchema>;
+
+export const reactionSnapshotSchema = z.object({
+  messageId: z.string().min(1),
+  conversationId: z.string().min(1),
+  items: z.array(z.object({
+    userId: z.string().min(1),
+    emoji: z.string().min(1).max(8),
+  })),
+}).passthrough();
+
+export type ReactionSnapshotDto = z.infer<typeof reactionSnapshotSchema>;
 
 export const attachmentCreatedSchema = z.object({
   id: z.string().min(1),

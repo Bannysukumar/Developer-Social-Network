@@ -13,6 +13,7 @@ import type { HostMessage } from "../shared/protocol";
 import type { DisplayMessage } from "./auth-service";
 import { chatActivity } from "./presence-state";
 import { attachmentCaption, fileKind, fileTypeLabel } from "./attachment-layout";
+import { GIFS, QUICK_REACTIONS, STICKERS } from "./media-catalog";
 import { dateSeparatorLabel, shouldLoadOlderHistory } from "./date-label";
 import { TYPING_IDLE_MS, typingCommand } from "./typing-debounce";
 
@@ -249,6 +250,13 @@ export function renderWebview(webview: Webview, state: HostState): string {
     .nav-btn, .attach-btn, .send-btn { transition: background 120ms linear, transform 80ms linear; }
     .attach-btn:active, .send-btn:active { transform: translateY(1px); }
     .image-bubble img { animation: image-in 160ms ease; }
+    .motion.pulse i { animation: gif-pulse 1.1s ease-in-out infinite; }
+    .motion.bounce i { animation: gif-bounce 1s ease-in-out infinite; }
+    .motion.spin i { animation: spin 1.4s linear infinite; }
+    .motion.slide i { animation: gif-slide 1.2s ease-in-out infinite; }
+    @keyframes gif-pulse { 50% { transform: scale(1.35); } }
+    @keyframes gif-bounce { 50% { transform: translateY(-16px); } }
+    @keyframes gif-slide { 50% { transform: translateX(18px); } }
     .image-bubble.loading::after { animation: shimmer 1.2s ease-in-out infinite; }
     .upload-bar::before { animation: upload-slide 1s linear infinite; }
     @keyframes image-in { from { opacity: 0; } to { opacity: 1; } }
@@ -301,6 +309,21 @@ export function renderWebview(webview: Webview, state: HostState): string {
   .image-bubble { display: block; padding: 0; border: 0; background: transparent; max-width: 100%; }
   .image-bubble img { display: block; max-width: min(320px, 100%); max-height: 240px; width: auto; height: auto; object-fit: contain; border-radius: 12px; background: var(--vscode-input-background); }
   .msg-caption { margin-top: 4px; white-space: pre-wrap; word-break: break-word; }
+  .sticker-bubble { width: 128px; height: 128px; padding: 0; border: 0; background: transparent; }
+  .sticker-bubble svg { width: 128px; height: 128px; display: block; }
+  .motion { width: min(200px, 100%); height: 112px; border-radius: 12px; display: grid; place-items: center; overflow: hidden; background: color-mix(in srgb, var(--vscode-foreground) 10%, transparent); }
+  .motion i { width: 28px; height: 28px; border-radius: 50%; background: var(--vscode-button-background); display: block; }
+  .motion.bounce i { border-radius: 8px; }
+  .motion.spin i { border-radius: 4px; }
+  .motion.slide i { width: 36px; height: 18px; border-radius: 9px; }
+  .react-row { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; max-width: 100%; }
+  .react-chip { min-height: 22px; padding: 0 6px; border-radius: 11px; }
+  .react-chip.mine { border-color: var(--vscode-focusBorder); }
+  .react-pop, .media-picker { display: grid; gap: 8px; padding: 8px; border: 1px solid var(--vscode-panel-border); border-radius: 10px; background: var(--vscode-editorWidget-background, var(--vscode-editor-background)); }
+  .media-picker { max-height: 240px; overflow: auto; }
+  .media-grid { display: flex; flex-wrap: wrap; gap: 6px; }
+  .media-grid .btn { width: 72px; height: 72px; padding: 4px; }
+  .media-grid svg { width: 56px; height: 56px; }
   .image-bubble.loading { width: min(220px, 100%); height: 148px; border-radius: 12px; background: var(--vscode-input-background); position: relative; overflow: hidden; }
   .image-bubble.loading::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--vscode-foreground) 14%, transparent), transparent); }
   .image-error { display: grid; gap: 6px; min-width: 140px; padding: 8px; border-radius: 12px; background: var(--vscode-input-background); }
@@ -556,6 +579,16 @@ export function renderWebview(webview: Webview, state: HostState): string {
         <p class="muted" id="thread-block" hidden>You blocked this user.</p>
         <form id="message-form" class="composer">
           <div id="attach-tray" class="attach-panel" hidden></div>
+          <div id="media-picker" class="media-picker" hidden>
+            <div class="row">
+              <button class="btn" type="button" data-act="picker-tab" data-id="sticker">Stickers</button>
+              <button class="btn" type="button" data-act="picker-tab" data-id="gif">GIFs</button>
+            </div>
+            <label id="gif-search-label">Search GIFs<input id="gif-query" type="search" maxlength="40" placeholder="Search GIFs" autocomplete="off"></label>
+            <p class="muted">GIF search stays on this device. DevConnect does not send the search to a GIF service.</p>
+            <div id="media-grid" class="media-grid"></div>
+            <p class="muted" id="media-empty" hidden>No GIFs match that search.</p>
+          </div>
           <div class="composer-row">
             <div class="attach-wrap">
               <button class="btn quiet attach-btn" id="attach-btn" type="button" data-act="toggle-attach" data-id="attach" aria-label="Attach files" aria-haspopup="menu" aria-expanded="false" title="Attach files"><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M8.2 12.4 14.6 6a3.2 3.2 0 0 1 4.5 4.5l-8.2 8.2a4.6 4.6 0 0 1-6.5-6.5l7.4-7.4"/></svg></button>
@@ -565,6 +598,8 @@ export function renderWebview(webview: Webview, state: HostState): string {
                 <button class="btn quiet" type="button" role="menuitem" data-act="pick-files" data-id="any">Browse files</button>
               </div>
             </div>
+            <button class="btn quiet attach-btn" id="sticker-btn" type="button" data-act="open-picker" data-id="sticker" aria-label="Stickers" title="Stickers">☺</button>
+            <button class="btn quiet attach-btn" id="gif-btn" type="button" data-act="open-picker" data-id="gif" aria-label="GIFs" title="GIFs">GIF</button>
             <label class="composer-field">Message
               <textarea name="text" maxlength="4000" rows="1" placeholder="Write a message..."></textarea>
             </label>
@@ -674,7 +709,7 @@ export function renderWebview(webview: Webview, state: HostState): string {
         <button class="btn quiet" type="button" data-settings="menu">Settings</button>
         <h1>About</h1>
         <p>DevConnect</p>
-        <p class="muted" id="about-version">Version 0.4.51</p>
+        <p class="muted" id="about-version">Version 0.4.52</p>
         <p class="muted">A developer network inside Visual Studio Code. Messages stay encrypted on your devices.</p>
       </div>
     </section>
@@ -710,6 +745,24 @@ export function renderWebview(webview: Webview, state: HostState): string {
     let lastMessageCount = 0;
     let lastNewestId = "";
     let openMenuId = "";
+    function paintPicker() {
+      const box = document.getElementById("media-picker");
+      const grid = document.getElementById("media-grid");
+      const empty = document.getElementById("media-empty");
+      const search = document.getElementById("gif-search-label");
+      if (!box || !grid) return;
+      box.hidden = !pickerTab;
+      if (search) search.hidden = pickerTab !== "gif";
+      const needle = gifQuery.trim().toLowerCase();
+      const items = pickerTab === "gif"
+        ? gifCatalog.filter((item) => !needle || item.name.toLowerCase().indexOf(needle) >= 0 || item.keywords.join(" ").indexOf(needle) >= 0)
+        : pickerTab === "sticker" ? stickerCatalog : [];
+      if (empty) empty.hidden = pickerTab !== "gif" || items.length > 0;
+      grid.innerHTML = items.map((item) => {
+        if (item.svg) return '<button class="btn" type="button" data-act="send-media" data-kind="sticker" data-id="' + esc(item.id) + '" aria-label="Send sticker ' + esc(item.name) + '">' + item.svg + '</button>';
+        return '<button class="btn motion ' + esc(item.motion) + '" type="button" data-act="send-media" data-kind="gif" data-id="' + esc(item.id) + '" aria-label="Send GIF ' + esc(item.name) + '"><i></i></button>';
+      }).join("");
+    }
   let heldNew = 0;
   let publishedViewing = "";
   function publishViewing() {
@@ -738,6 +791,12 @@ export function renderWebview(webview: Webview, state: HostState): string {
   const attachmentCaption = ${attachmentCaption.toString()};
   const fileKind = ${fileKind.toString()};
   const fileTypeLabel = ${fileTypeLabel.toString()};
+  const stickerCatalog = ${JSON.stringify(STICKERS)};
+  const gifCatalog = ${JSON.stringify(GIFS)};
+  const quickReactions = ${JSON.stringify(QUICK_REACTIONS)};
+  let pickerTab = "";
+  let gifQuery = "";
+  let reactFor = "";
   const shouldLoadOlderHistory = ${shouldLoadOlderHistory.toString()};
   let olderRequestArmed = true;
   let olderScrollReady = false;
@@ -1088,8 +1147,34 @@ export function renderWebview(webview: Webview, state: HostState): string {
       const retryFiles = (m.attachments || []).length && m.id.indexOf("local-") === 0
         ? '<button class="btn" type="button" data-act="retry-files" data-id="' + esc(m.id) + '">Retry</button>'
         : retry;
-      const media = !deleted && (m.attachments || []).length ? " media" : "";
-      return separator + '<div class="msg ' + (mine ? "mine" : "theirs") + (failed ? " failed" : "") + (deleted ? " deleted" : "") + (m.sealed ? " sealed" : "") + media + '">' + (deleted ? "" : files) + body + '<div class="msg-meta">' + esc(clock(m.createdAt)) + receipt + actions + '</div>' + menu + (failed ? '<div class="msg-meta">' + esc(m.sendError || "Message failed to send.") + '</div>' + retryFiles : "") + '</div>';
+      const sticker = !deleted && m.media && m.media.kind === "sticker" ? (stickerCatalog.find((item) => item.id === m.media.id) || null) : null;
+      const gif = !deleted && m.media && m.media.kind === "gif" ? (gifCatalog.find((item) => item.id === m.media.id) || null) : null;
+      const visual = sticker
+        ? '<div class="sticker-bubble" role="img" aria-label="Sticker ' + esc(sticker.name) + '">' + sticker.svg + '</div>'
+        : gif
+          ? '<div class="motion ' + esc(gif.motion) + '" role="img" aria-label="GIF ' + esc(gif.name) + '"><i></i></div>'
+          : (m.media && !deleted ? '<div class="file-card"><span class="file-name">' + esc(m.media.kind === "gif" ? "GIF unavailable" : "Sticker unavailable") + '</span></div>' : "");
+      const shownBody = m.media ? "" : body;
+      const groups = {};
+      (m.reactions || []).forEach((mark) => {
+        if (!groups[mark.emoji]) groups[mark.emoji] = [];
+        if (groups[mark.emoji].indexOf(mark.userId) < 0) groups[mark.emoji].push(mark.userId);
+      });
+      const selfId = state.user ? state.user.id : "";
+      const reactButtons = Object.keys(groups).map((emoji) => {
+        const users = groups[emoji];
+        const mine = users.indexOf(selfId) >= 0;
+        const names = users.map((id) => id === selfId ? "You" : "Friend").join(", ");
+        return '<button class="btn react-chip' + (mine ? " mine" : "") + '" type="button" data-act="react" data-id="' + esc(m.id) + '" data-emoji="' + esc(emoji) + '" title="' + esc(names) + '" aria-label="' + esc(emoji + " " + users.length + (mine ? ", including you" : "")) + '">' + emoji + " " + users.length + '</button>';
+      }).join("");
+      const reactPop = reactFor === m.id
+        ? '<div class="react-pop">' + quickReactions.map((emoji) => '<button class="btn' + ((groups[emoji] || []).indexOf(selfId) >= 0 ? " mine" : "") + '" type="button" data-act="react" data-id="' + esc(m.id) + '" data-emoji="' + esc(emoji) + '" aria-label="React with ' + esc(emoji) + '">' + emoji + '</button>').join("") + '</div>'
+        : "";
+      const reactToggle = !deleted && m.id && String(m.id).indexOf("local-") !== 0
+        ? '<button class="btn quiet icon-btn" type="button" data-act="react-menu" data-id="' + esc(m.id) + '" aria-label="Add reaction">＋</button>'
+        : "";
+      const media = !deleted && ((m.attachments || []).length || m.media) ? " media" : "";
+      return separator + '<div class="msg ' + (mine ? "mine" : "theirs") + (failed ? " failed" : "") + (deleted ? " deleted" : "") + (m.sealed ? " sealed" : "") + media + '">' + (deleted ? "" : visual + files) + shownBody + '<div class="react-row">' + reactButtons + reactToggle + '</div>' + reactPop + '<div class="msg-meta">' + esc(clock(m.createdAt)) + receipt + actions + '</div>' + menu + (failed ? '<div class="msg-meta">' + esc(m.sendError || "Message failed to send.") + '</div>' + retryFiles : "") + '</div>';
       } catch (ignored) {
         return '<div class="msg">' + esc(m && m.displayText ? m.displayText : "Message") + '</div>';
       }
@@ -1239,6 +1324,7 @@ export function renderWebview(webview: Webview, state: HostState): string {
       if (active) btn.setAttribute("aria-busy", "true");
       else btn.removeAttribute("aria-busy");
     });
+    paintPicker();
     publishViewing();
   }
   function ask(text, okLabel, action) {
@@ -1287,7 +1373,36 @@ export function renderWebview(webview: Webview, state: HostState): string {
     if (go) { vscode.postMessage({ version: 1, type: "navigate", destination: go }); return; }
     const act = target.getAttribute("data-act");
     const id = target.getAttribute("data-id");
+    if (act === "open-picker" || act === "picker-tab") {
+      pickerTab = pickerTab === id ? "" : (id || "sticker");
+      paintPicker();
+      return;
+    }
     if (!act || !id) return;
+    if (act === "send-media") {
+      const kind = target.getAttribute("data-kind");
+      if (state.activeConversationId && (kind === "sticker" || kind === "gif") && !state.busy) {
+        vscode.postMessage({ version: 1, type: "sendMedia", conversationId: state.activeConversationId, kind: kind, id: id });
+        pickerTab = "";
+        paintPicker();
+      }
+      return;
+    }
+    if (act === "react-menu") {
+      reactFor = reactFor === id ? "" : id;
+      apply(state);
+      return;
+    }
+    if (act === "react") {
+      const emoji = target.getAttribute("data-emoji") || "";
+      if (!emoji || state.busy) return;
+      const removing = target.classList.contains("mine");
+      vscode.postMessage(removing
+        ? { version: 1, type: "clearReaction", messageId: id }
+        : { version: 1, type: "setReaction", messageId: id, emoji: emoji });
+      reactFor = "";
+      return;
+    }
     if (state.busy && act !== "open-preview" && act !== "save-attachment" && act !== "reload-image" && act !== "retry-files" && act !== "close-preview") return;
     if (act === "open-user") vscode.postMessage({ version: 1, type: "openUser", userId: id });
     if (act === "friend") vscode.postMessage({ version: 1, type: "sendFriendRequest", userId: id });
@@ -1542,6 +1657,13 @@ export function renderWebview(webview: Webview, state: HostState): string {
     const target = event.target instanceof HTMLElement ? event.target.closest("[data-act='zoom-preview']") : null;
     const viewer = target instanceof HTMLElement ? target.closest(".viewer") : null;
     if (viewer) viewer.classList.toggle("zoomed");
+  });
+  document.getElementById("gif-query").addEventListener("keydown", (event) => {
+    if (event.key === "Enter") event.preventDefault();
+  });
+  document.getElementById("gif-query").addEventListener("input", (event) => {
+    gifQuery = event.target && event.target.value ? event.target.value : "";
+    paintPicker();
   });
   document.getElementById("message-form").addEventListener("submit", (e) => {
     e.preventDefault();

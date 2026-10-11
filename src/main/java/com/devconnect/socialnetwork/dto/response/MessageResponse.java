@@ -20,6 +20,7 @@ public record MessageResponse(
         Instant deliveredAt,
         Instant readAt,
         boolean deletedForEveryone,
-        List<String> attachmentIds
+        List<String> attachmentIds,
+        List<ReactionMark> reactions
 ) {
 }

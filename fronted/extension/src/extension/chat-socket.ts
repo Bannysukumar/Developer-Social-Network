@@ -1,10 +1,10 @@
 import WebSocket from "ws";
 import { z } from "zod";
-import { messageSchema, notificationSchema, type MessageDto, type NotificationDto } from "../shared/api-types";
+import { messageSchema, notificationSchema, reactionSnapshotSchema, type MessageDto, type NotificationDto, type ReactionSnapshotDto } from "../shared/api-types";
 import { retryDelayMs } from "./realtime-state";
 
 const serverFrameSchema = z.object({
-  type: z.enum(["READY", "MESSAGE", "DELIVERED", "READ", "PONG", "ERROR", "NOTIFICATION", "PRESENCE_UPDATE", "PRESENCE_CLEAR", "TYPING_START", "TYPING_STOP", "MESSAGE_HIDDEN", "MESSAGE_DELETED", "BLOCK_STATE"]),
+  type: z.enum(["READY", "MESSAGE", "DELIVERED", "READ", "PONG", "ERROR", "NOTIFICATION", "PRESENCE_UPDATE", "PRESENCE_CLEAR", "TYPING_START", "TYPING_STOP", "MESSAGE_HIDDEN", "MESSAGE_DELETED", "BLOCK_STATE", "REACTION"]),
   data: z.unknown().optional(),
 }).passthrough();
 
@@ -27,6 +27,12 @@ export function parseServerFrame(raw: string): ServerFrame | undefined {
   } catch {
     return undefined;
   }
+}
+
+export function reactionFromFrame(frame: ServerFrame): ReactionSnapshotDto | undefined {
+  if (frame.type !== "REACTION") return undefined;
+  const parsed = reactionSnapshotSchema.safeParse(frame.data);
+  return parsed.success ? parsed.data : undefined;
 }
 
 export function messageFromFrame(frame: ServerFrame): MessageDto | undefined {
