@@ -107,17 +107,31 @@ export class SessionFlow {
 
   private acceptHistory(opened: { conversation: { id: string }; messages: HostState["messages"]; nextCursor: string | null; hasNext: boolean }): void {
     this.activeConversationId = opened.conversation.id;
-    this.messages = mergeHistory(this.messages, opened.messages);
+    const kept = this.messages.filter((item) => item.conversationId === opened.conversation.id);
+    this.messages = opened.messages.length === 0 ? kept : mergeHistory(kept, opened.messages);
     this.messageCursor = opened.nextCursor;
     this.messageHasMore = opened.hasNext;
     this.historyLoading = false;
     this.historyError = null;
   }
 
+  private rememberConversation(conversation: HostState["conversations"][number]): void {
+    const index = this.conversations.findIndex((item) => item.id === conversation.id);
+    if (index >= 0) {
+      this.conversations = this.conversations.map((item) => item.id === conversation.id ? { ...item, ...conversation } : item);
+      return;
+    }
+    this.conversations = [conversation, ...this.conversations];
+  }
+
   private rememberHistoryCache(): void {
     const id = this.activeConversationId;
-    if (!id || this.historyLoading) return;
+    if (!id || this.historyLoading || this.historyError) return;
     const messages = this.messages.filter((item) => item.conversationId === id);
+    if (messages.length === 0) {
+      this.historyCache.delete(id);
+      return;
+    }
     this.historyCache.delete(id);
     this.historyCache.set(id, { messages, cursor: this.messageCursor, hasMore: this.messageHasMore });
     while (this.historyCache.size > 8) {
@@ -130,7 +144,7 @@ export class SessionFlow {
   private async openThread(message: { conversationId?: string; participantId?: string }): Promise<void> {
     if (!this.auth.isAuthenticated()) return;
     const cached = message.conversationId ? this.historyCache.get(message.conversationId) : undefined;
-    if (cached && message.conversationId) {
+    if (cached && cached.messages.length > 0 && message.conversationId) {
       this.activeConversationId = message.conversationId;
       this.messages = cached.messages;
       this.messageCursor = cached.cursor;
@@ -139,12 +153,11 @@ export class SessionFlow {
       this.historyError = null;
       this.finishOpen(message.conversationId);
       this.pushState();
-      return;
     }
     const epoch = this.beginHistory();
     if (message.conversationId) {
       this.activeConversationId = message.conversationId;
-      this.messages = [];
+      if (!cached?.messages.length) this.messages = [];
     }
     this.show("messages", this.screen !== "messages");
     this.pushState();
@@ -156,6 +169,7 @@ export class SessionFlow {
       });
       this.log(`history first-page conversationId=${opened.conversation.id} messages=${opened.messages.length} hasMore=${opened.hasNext} ms=${Date.now() - started}`);
       if (epoch !== this.historyEpoch) return;
+      this.rememberConversation(opened.conversation);
       this.acceptHistory(opened);
       this.finishOpen(opened.conversation.id, opened.messages[0]?.displayText, opened.conversation.participantIds);
       this.pushState();
@@ -195,9 +209,9 @@ export class SessionFlow {
     try {
       const page = await this.auth.loadOlderMessages(conversationId, cursor);
       if (epoch !== this.historyEpoch || this.activeConversationId !== conversationId) return;
-      this.messages = mergeHistory(this.messages, page.messages);
+      if (page.messages.length > 0) this.messages = mergeHistory(this.messages, page.messages);
       this.messageCursor = page.nextCursor;
-      this.messageHasMore = page.hasNext;
+      this.messageHasMore = page.messages.length > 0 && page.hasNext;
       this.log(`history older-page conversationId=${conversationId} messages=${page.messages.length} hasMore=${page.hasNext} ms=${Date.now() - started}`);
     } catch (error) {
       if (epoch !== this.historyEpoch) return;

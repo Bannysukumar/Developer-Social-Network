@@ -23,6 +23,8 @@ import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.stereotype.Service;
 
 import java.time.Clock;
+import java.time.Instant;
+import java.util.Comparator;
 import java.util.List;
 
 @Service
@@ -70,6 +72,18 @@ public class ConversationService {
         if (existing.isPresent()) {
             return new WriteResult<>(toResponse(existing.get()), false);
         }
+        ConversationEntity samePair = oldestPair(userId, participantId);
+        if (samePair != null) {
+            if (samePair.getParticipantKey() == null || samePair.getParticipantKey().isBlank()) {
+                samePair.setParticipantKey(key);
+                try {
+                    repository.save(samePair);
+                } catch (DuplicateKeyException ignored) {
+                    // Another request already claimed this pair.
+                }
+            }
+            return new WriteResult<>(toResponse(samePair), false);
+        }
         ConversationEntity conversation = new ConversationEntity();
         conversation.setId(Ids.newId());
         conversation.setType(ConversationType.ONE_TO_ONE);
@@ -104,6 +118,33 @@ public class ConversationService {
 
     public ConversationResponse get(String userId, String conversationId) {
         return toResponse(requireMember(userId, conversationId));
+    }
+
+    /** Every one-to-one conversation for this pair, including older rows saved before the pair key existed. */
+    public List<String> relatedConversationIds(String userId, String conversationId) {
+        ConversationEntity current = requireMember(userId, conversationId);
+        if (current.getParticipantIds() == null || current.getParticipantIds().size() != 2) {
+            return List.of(conversationId);
+        }
+        String first = current.getParticipantIds().get(0);
+        String second = current.getParticipantIds().get(1);
+        Query query = Query.query(Criteria.where("participantIds").all(first, second)
+                .and("type").is(ConversationType.ONE_TO_ONE));
+        List<String> ids = mongoTemplate.find(query, ConversationEntity.class).stream()
+                .filter(item -> item.getParticipantIds() != null && item.getParticipantIds().contains(userId))
+                .map(ConversationEntity::getId)
+                .distinct()
+                .toList();
+        return ids.isEmpty() ? List.of(conversationId) : ids;
+    }
+
+    private ConversationEntity oldestPair(String userId, String participantId) {
+        Query query = Query.query(Criteria.where("participantIds").all(userId, participantId)
+                .and("type").is(ConversationType.ONE_TO_ONE));
+        return mongoTemplate.find(query, ConversationEntity.class).stream()
+                .filter(item -> item.getParticipantIds() != null && item.getParticipantIds().contains(userId))
+                .min(Comparator.comparing(item -> item.getCreatedAt() == null ? Instant.EPOCH : item.getCreatedAt()))
+                .orElse(null);
     }
 
     public ConversationEntity requireMember(String userId, String conversationId) {

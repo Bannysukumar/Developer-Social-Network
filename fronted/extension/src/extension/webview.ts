@@ -571,7 +571,7 @@ export function renderWebview(webview: Webview, state: HostState): string {
         <button class="btn quiet" type="button" data-settings="menu">Settings</button>
         <h1>About</h1>
         <p>DevConnect</p>
-        <p class="muted" id="about-version">Version 0.4.40</p>
+        <p class="muted" id="about-version">Version 0.4.41</p>
         <p class="muted">A developer network inside Visual Studio Code. Messages stay encrypted on your devices.</p>
       </div>
     </section>
@@ -634,6 +634,7 @@ export function renderWebview(webview: Webview, state: HostState): string {
   const dateSeparatorLabel = ${dateSeparatorLabel.toString()};
   const shouldLoadOlderHistory = ${shouldLoadOlderHistory.toString()};
   let olderRequestArmed = true;
+  let olderScrollReady = false;
   function esc(value) {
     return String(value ?? "").replace(/[&<>"']/g, (ch) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" })[ch]);
   }
@@ -968,6 +969,8 @@ export function renderWebview(webview: Webview, state: HostState): string {
     if (switchedThread) {
       list.scrollTop = list.scrollHeight;
       heldNew = 0;
+      olderScrollReady = false;
+      window.setTimeout(() => { olderScrollReady = true; }, 200);
     } else if (olderPage) {
       list.scrollTop = previousTop + (list.scrollHeight - previousHeight);
     } else if (nearBottom || ordered.length < 2) {
@@ -1468,7 +1471,7 @@ export function renderWebview(webview: Webview, state: HostState): string {
   });
   document.getElementById("message-list").addEventListener("scroll", () => {
     const list = document.getElementById("message-list");
-    if (!olderRequestArmed) return;
+    if (!olderRequestArmed || !olderScrollReady) return;
     if (!shouldLoadOlderHistory({
       hasMore: state.historyHasMore === true,
       loading: state.historyLoading === true,

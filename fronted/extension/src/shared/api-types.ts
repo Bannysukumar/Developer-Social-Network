@@ -150,7 +150,7 @@ export const messageSchema = z.object({
   deliveredAt: z.string().nullable().optional(),
   readAt: z.string().nullable().optional(),
   deletedForEveryone: z.boolean().optional(),
-  attachmentIds: z.array(z.string()).optional(),
+  attachmentIds: z.array(z.string()).nullable().optional(),
 }).passthrough();
 
 export type MessageDto = z.infer<typeof messageSchema>;

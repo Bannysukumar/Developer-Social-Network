@@ -73,6 +73,11 @@ describe("chat history", () => {
     expect(labels[2]).toBe("Wednesday, 30 September");
   });
 
+  test("an empty older page does not remove messages already on screen", () => {
+    const current = [message("new", "c1", at(2026, 9, 11)), message("old", "c1", at(2026, 9, 1))];
+    expect(mergeHistory(current, []).map((item) => item.id)).toEqual(["new", "old"]);
+  });
+
   test("equal timestamps stay in a stable newest-id order and are not duplicated", () => {
     const stamp = at(2026, 9, 11, 12);
     const merged = mergeHistory(

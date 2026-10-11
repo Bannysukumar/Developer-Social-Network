@@ -150,11 +150,11 @@ public class MessageService {
 
     public CursorPageResponse<MessageResponse> list(String userId, String conversationId, String cursor, int limit) {
         long started = System.nanoTime();
-        conversationService.requireMember(userId, conversationId);
+        List<String> conversationIds = conversationService.relatedConversationIds(userId, conversationId);
         int pageSize = Math.min(Math.max(limit, 1), 50);
         CursorCodec.Cursor decoded = CursorCodec.decode(cursor);
-        Criteria criteria = Criteria.where("conversationId").is(conversationId)
-                .and("deletedForUserIds").ne(userId);
+        Criteria criteria = Criteria.where("conversationId").in(conversationIds)
+                .and("deletedForUserIds").nin(userId);
         if (decoded != null) {
             criteria = new Criteria().andOperator(
                     criteria,
@@ -178,16 +178,38 @@ public class MessageService {
         String next = null;
         if (hasNext && !found.isEmpty()) {
             MessageEntity last = found.get(found.size() - 1);
-            next = CursorCodec.encode(last.getCreatedAt(), last.getId());
+            if (last.getCreatedAt() != null && last.getId() != null) {
+                next = CursorCodec.encode(last.getCreatedAt(), last.getId());
+            }
         }
         log.info(
-                "History page conversationId={} returned={} hasNext={} ms={}",
+                "History page conversationId={} searched={} returned={} hasNext={} ms={}",
                 conversationId,
+                conversationIds.size(),
                 found.size(),
                 hasNext,
                 millis(started, System.nanoTime())
         );
-        return new CursorPageResponse<>(found.stream().map(messageMapper::toResponse).toList(), next, hasNext);
+        return new CursorPageResponse<>(found.stream().map(entity -> {
+            MessageResponse response = messageMapper.toResponse(entity);
+            if (conversationId.equals(response.conversationId())) return response;
+            return new MessageResponse(
+                    response.id(),
+                    conversationId,
+                    response.senderId(),
+                    response.recipientId(),
+                    response.ciphertext(),
+                    response.messageType(),
+                    response.status(),
+                    response.deviceId(),
+                    response.keyId(),
+                    response.createdAt(),
+                    response.deliveredAt(),
+                    response.readAt(),
+                    response.deletedForEveryone(),
+                    response.attachmentIds()
+            );
+        }).toList(), next, hasNext);
     }
 
     public MessageAck markDelivered(String userId, String messageId) {

@@ -298,10 +298,11 @@ export class AuthService {
       throw new ApiError("request", "Choose a friend or conversation first.");
     }
     const page = await this.conversationsApi.listMessages(conversation.id);
+    const named = await this.withPeerName(conversation, this.getUser()?.id);
     return {
-      conversation,
+      conversation: named,
       messages: page.items.map((message) => this.toDisplayMessage(message)),
-      nextCursor: page.nextCursor,
+      nextCursor: page.nextCursor ?? null,
       hasNext: page.hasNext,
     };
   }
@@ -310,7 +311,7 @@ export class AuthService {
     const page = await this.conversationsApi.listMessages(conversationId, 30, cursor);
     return {
       messages: page.items.map((message) => this.displayMessage(message)),
-      nextCursor: page.nextCursor,
+      nextCursor: page.nextCursor ?? null,
       hasNext: page.hasNext,
     };
   }

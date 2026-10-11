@@ -104,6 +104,7 @@ function newestFirst<T extends { id?: string; createdAt?: string | null }>(items
  * The result stays newest-first, matching the history API.
  */
 export function mergeHistory<T extends MessageDto & { displayText?: string }>(current: readonly T[], fetched: readonly T[]): T[] {
+  if (fetched.length === 0) return [...current];
   const scope = fetched.find((item) => item.conversationId)?.conversationId;
   if (!scope) {
     const previous = new Map(current.map((item) => [item.id, item]));
