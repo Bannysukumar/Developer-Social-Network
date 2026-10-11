@@ -1,9 +1,18 @@
 {
   "name": "devconnect-vscode-extension",
   "displayName": "DevConnect",
-  "description": "A developer community inside Visual Studio Code.",
+  "description": "Discover developers, manage friendships, and exchange private messages inside Visual Studio Code.",
+  "keywords": [
+    "developer networking",
+    "developer community",
+    "friends",
+    "messaging",
+    "chat",
+    "notifications"
+  ],
   "publisher": "Bannysukumar2255",
-  "version": "0.4.44",
+  "version": "0.4.48",
+  "icon": "assets/devconnect.png",
   "private": true,
   "engines": {
     "vscode": "^1.85.0"
@@ -65,55 +74,13 @@
       },
       {
         "command": "devconnect.openSettings",
-        "title": "DevConnect: Settings"
+        "title": "DevConnect: Open Settings"
       },
       {
         "command": "devconnect.markNotificationsRead",
         "title": "DevConnect: Mark Notifications as Read"
       }
-    ],
-    "configuration": {
-      "title": "DevConnect",
-      "properties": {
-        "devconnect.apiBaseUrl": {
-          "type": "string",
-          "default": "https://devconnectt.duckdns.org/api/v1",
-          "description": "DevConnect REST API base URL. Must end in /api/v1. HTTPS is required unless the host is localhost or allowInsecureHttp is enabled."
-        },
-        "devconnect.allowInsecureHttp": {
-          "type": "boolean",
-          "default": false,
-          "description": "Allow a remote http:// API base URL. Leave this off for the HTTPS API."
-        },
-        "devconnect.notifyMessages": {
-          "type": "boolean",
-          "default": true,
-          "description": "Show a VS Code notification when a message arrives and that chat is not open."
-        },
-        "devconnect.notifyFriendRequests": {
-          "type": "boolean",
-          "default": true,
-          "description": "Show a VS Code notification for a new friend request."
-        },
-        "devconnect.notifyFriendAccepted": {
-          "type": "boolean",
-          "default": true,
-          "description": "Show a VS Code notification when someone accepts your friend request."
-        },
-        "devconnect.debugNoticeRouting": {
-          "type": "boolean",
-          "default": false,
-          "description": "Write notice routing decisions to the DevConnect output channel. Message text, keys, and tokens are not logged."
-        },
-        "devconnect.requestTimeoutMs": {
-          "type": "number",
-          "default": 15000,
-          "minimum": 1,
-          "maximum": 60000,
-          "description": "Maximum time in milliseconds to wait for an API response."
-        }
-      }
-    }
+    ]
   },
   "main": "./dist/extension.js",
   "scripts": {

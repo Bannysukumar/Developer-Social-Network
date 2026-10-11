@@ -28,6 +28,40 @@ describe("cross-device key recovery", () => {
     expect(isEncryptedEnvelope(ciphertext)).toBe(true);
   });
 
+  test("a message sealed to an old device and this device opens on this device", () => {
+    const sender = createDeviceMaterial();
+    sender.deviceId = "friend";
+    const previous = createDeviceMaterial();
+    previous.deviceId = "old-laptop";
+    const current = createDeviceMaterial();
+    current.deviceId = "this-laptop";
+    const ciphertext = encryptForDevices("sent just now", "conv-1", sender, [
+      recipientBundle(previous, "old-laptop"),
+      recipientBundle(current, "this-laptop"),
+    ]);
+    expect(decryptMessage(ciphertext, current)).toBe("sent just now");
+    expect(decryptMessage(ciphertext, previous)).toBe("sent just now");
+  });
+
+  test("a one-time seal still opens after the device key is reloaded", () => {
+    const sender = createDeviceMaterial();
+    sender.deviceId = "friend";
+    const recipient = createDeviceMaterial();
+    recipient.deviceId = "this-laptop";
+    const restored = JSON.parse(JSON.stringify(recipient)) as typeof recipient;
+    const ciphertext = encryptForDevices("11:49 message", "conv-1", sender, [{
+      deviceId: "this-laptop",
+      identityPublicKey: recipient.identityPublic,
+      signedPreKey: {
+        preKeyId: recipient.signedPreKeyId,
+        publicKey: recipient.signedPreKeyPublic,
+        signature: recipient.signedPreKeySignature,
+      },
+      oneTimePreKey: { preKeyId: recipient.oneTime[0].id, publicKey: recipient.oneTime[0].publicKey },
+    }]);
+    expect(decryptMessage(ciphertext, restored)).toBe("11:49 message");
+  });
+
   test("the recipient device still decrypts with its own key", () => {
     const sender = createDeviceMaterial();
     sender.deviceId = "laptop";

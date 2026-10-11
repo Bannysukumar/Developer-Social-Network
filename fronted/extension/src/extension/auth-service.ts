@@ -387,41 +387,53 @@ export class AuthService {
       throw new ApiError("configuration", "Restore your recovery passphrase in Settings before sending on this device.");
     }
     const material = await this.loadDeviceMaterial();
-    const userId = this.getUser()?.id;
     if (this.keysPublished && material.deviceId) {
       this.deviceKeys = material;
+      await this.retireOtherEncryptionDevices(material.deviceId);
       return;
     }
-    const published = material.deviceId && userId
-      ? await this.publishedKeyIsUsable(userId, material.deviceId)
-      : false;
-    if (published === true) {
-      this.deviceKeys = material;
-      this.keysPublished = true;
-      return;
-    }
-    if (published === "unknown" && material.deviceId) {
-      this.deviceKeys = material;
-      return;
-    }
-    if (!material.deviceId) {
+    if (!(await this.currentKeyIsPublished(material))) {
       const registered = await this.keysApi.registerIdentity({ publicKey: material.identityPublic });
       material.deviceId = registered.id;
       await this.uploadPreKeys(material, true);
-    } else {
+    } else if (material.deviceId) {
       try {
         await this.uploadPreKeys(material, false);
       } catch {
-        // Keep this device id. Replacing it would leave messages sealed to the previous id unreadable.
-        this.deviceKeys = material;
-        this.keysPublished = false;
-        await this.session.saveDeviceKeys(JSON.stringify(material));
-        return;
+        const registered = await this.keysApi.registerIdentity({ publicKey: material.identityPublic });
+        material.deviceId = registered.id;
+        await this.uploadPreKeys(material, true);
       }
     }
     this.deviceKeys = material;
     this.keysPublished = true;
     await this.session.saveDeviceKeys(JSON.stringify(material));
+    if (material.deviceId) await this.retireOtherEncryptionDevices(material.deviceId);
+  }
+
+  private async currentKeyIsPublished(material: DeviceMaterial): Promise<boolean> {
+    const userId = this.getUser()?.id;
+    if (!userId || !material.deviceId) return false;
+    try {
+      const bundle = await this.keysApi.bundle(userId);
+      return bundle.devices.some((device) =>
+        device.deviceId === material.deviceId && device.signedPreKey?.publicKey === material.signedPreKeyPublic);
+    } catch {
+      return material.deviceId !== undefined;
+    }
+  }
+
+  private async retireOtherEncryptionDevices(currentDeviceId: string): Promise<void> {
+    const userId = this.getUser()?.id;
+    if (!userId) return;
+    try {
+      const bundle = await this.keysApi.bundle(userId);
+      for (const device of bundle.devices) {
+        if (device.deviceId !== currentDeviceId) await this.revokeDevice(device.deviceId);
+      }
+    } catch {
+      // An older encryption device staying listed must not block this one.
+    }
   }
 
   async sendMessage(conversationId: string, text: string): Promise<DisplayMessage> {
@@ -654,15 +666,6 @@ export class AuthService {
       if (parsed.identityPrivateJwk && parsed.signedPreKeyPrivateJwk) return parsed;
     }
     return createDeviceMaterial();
-  }
-
-  private async publishedKeyIsUsable(userId: string, deviceId: string): Promise<true | false | "unknown"> {
-    try {
-      const bundle = await this.keysApi.bundle(userId);
-      return bundle.devices.some((device) => device.deviceId === deviceId && hasVerifiedSignedPreKey(device));
-    } catch {
-      return "unknown";
-    }
   }
 
   private uploadPreKeys(material: DeviceMaterial, includeOneTime: boolean): Promise<unknown> {

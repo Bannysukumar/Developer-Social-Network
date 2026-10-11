@@ -59,7 +59,13 @@ export function encryptForDevices(
   }
   const selfKey = derive(rawPrivate(sender.signedPreKeyPrivateJwk), "devconnect-self-v1");
   const selfSealed = seal(plaintext, selfKey, conversationId);
-  const devices = recipients.map((recipient) => sealForRecipient(plaintext, conversationId, recipient));
+  const devices = recipients.flatMap((recipient) => {
+    const seals = [sealForRecipient(plaintext, conversationId, recipient)];
+    if (recipient.oneTimePreKey) {
+      seals.push(sealForRecipient(plaintext, conversationId, { ...recipient, oneTimePreKey: null }));
+    }
+    return seals;
+  });
   const envelope = {
     v: 2 as const,
     cid: conversationId,
@@ -86,9 +92,13 @@ export function decryptMessage(ciphertext: string, local: DeviceMaterial | undef
         // The self-seal belongs to the sending installation. Try a recipient seal next.
       }
     }
-    const targets: readonly DeviceSeal[] = envelope.v === 1
+    const listed: readonly DeviceSeal[] = envelope.v === 1
       ? [{ rid: "", preKeyId: envelope.preKeyId, eph: envelope.eph, iv: envelope.iv, ct: envelope.ct, tag: envelope.tag }]
       : envelope.devices;
+    const targets = [
+      ...listed.filter((target) => local.deviceId !== undefined && target.rid === local.deviceId),
+      ...listed.filter((target) => local.deviceId === undefined || target.rid !== local.deviceId),
+    ];
     for (const target of targets) {
       const opened = openForDevice(target, local, envelope.cid);
       if (opened !== undefined) return opened;
@@ -126,19 +136,32 @@ function sealForRecipient(plaintext: string, conversationId: string, recipient: 
 }
 
 function openForDevice(target: DeviceSeal, local: DeviceMaterial, conversationId: string): string | undefined {
-  const preKey = local.signedPreKeyId === target.preKeyId
+  const preKeyId = Number(target.preKeyId);
+  const oneTime = Array.isArray(local.oneTime) ? local.oneTime : [];
+  const matched = Number(local.signedPreKeyId) === preKeyId
     ? local.signedPreKeyPrivateJwk
-    : local.oneTime.find((item) => item.id === target.preKeyId)?.privateJwk;
-  if (!preKey) return undefined;
-  try {
-    const shared = diffieHellman({
-      privateKey: privateKey(preKey),
-      publicKey: publicKey("X25519", target.eph),
-    });
-    return open(target.ct, target.iv, target.tag, derive(shared, "devconnect-message-v1"), conversationId);
-  } catch {
-    return undefined;
+    : oneTime.find((item) => Number(item.id) === preKeyId)?.privateJwk;
+  const candidates = [
+    ...(matched ? [matched] : []),
+    local.signedPreKeyPrivateJwk,
+    ...oneTime.map((item) => item.privateJwk),
+  ];
+  const seen = new Set<string>();
+  for (const preKey of candidates) {
+    const mark = preKey?.d ?? "";
+    if (!mark || seen.has(mark)) continue;
+    seen.add(mark);
+    try {
+      const shared = diffieHellman({
+        privateKey: privateKey(preKey),
+        publicKey: publicKey("X25519", target.eph),
+      });
+      return open(target.ct, target.iv, target.tag, derive(shared, "devconnect-message-v1"), conversationId);
+    } catch {
+      // This private key does not belong to the seal. Try the next key on this device.
+    }
   }
+  return undefined;
 }
 
 function readEnvelope(ciphertext: string): Envelope | BundleEnvelope | undefined {

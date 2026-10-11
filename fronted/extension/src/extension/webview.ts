@@ -568,7 +568,10 @@ export function renderWebview(webview: Webview, state: HostState): string {
         <button class="btn quiet" type="button" data-settings="menu">Settings</button>
         <h1>Security</h1>
         <form id="recovery-form" class="stack">
-          <p class="muted">A recovery passphrase encrypts this device's key before it is saved to your account. The server cannot read the key or your messages. Messages from an installation that was wiped before a passphrase was saved cannot be opened.</p>
+          <p class="muted">Save a recovery passphrase on this installation before you reset the laptop, reinstall DevConnect, or sign in on another device. The passphrase encrypts this device's key. The server cannot read the key or your messages.</p>
+          <p class="muted">On this device: enter at least 10 characters, click Save recovery passphrase, and store that passphrase somewhere outside this laptop.</p>
+          <p class="muted">On a new installation: sign in, open Settings, then Security, enter the same passphrase, and click Restore this device.</p>
+          <p class="muted">If no passphrase was saved before an installation was wiped, messages sealed to that installation cannot be opened. A forgotten passphrase cannot be reset.</p>
           <label class="field">Recovery passphrase<input name="passphrase" type="password" autocomplete="new-password" minlength="10"></label>
           <div class="row">
             <button class="btn primary" type="submit" id="save-recovery">Save recovery passphrase</button>
@@ -583,7 +586,7 @@ export function renderWebview(webview: Webview, state: HostState): string {
         <button class="btn quiet" type="button" data-settings="menu">Settings</button>
         <h1>About</h1>
         <p>DevConnect</p>
-        <p class="muted" id="about-version">Version 0.4.44</p>
+        <p class="muted" id="about-version">Version 0.4.48</p>
         <p class="muted">A developer network inside Visual Studio Code. Messages stay encrypted on your devices.</p>
       </div>
     </section>
@@ -933,7 +936,7 @@ export function renderWebview(webview: Webview, state: HostState): string {
         ? '<p class="muted">This installation has no device key. Open Settings, then Security, and restore your recovery passphrase to read messages from the previous installation.</p>'
         : state.keyRecovery === "unavailable"
           ? '<p class="muted">These messages are saved on the server. The previous installation did not leave a recovery passphrase, so this device cannot open them.</p>'
-          : '<p class="muted">Some messages are sealed to another installation. Restore a recovery passphrase from Settings, then Security, if you saved one before that installation was wiped.</p>';
+          : '<p class="muted">These messages were sealed by an earlier installation. A recovery passphrase saved on this device protects this device only, and cannot open them.</p>';
     const historyBanner = ordered.length && state.historyLoading
       ? '<div class="history-note muted">Loading earlier messages…</div>'
       : ordered.length && state.historyError

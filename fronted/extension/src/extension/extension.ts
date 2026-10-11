@@ -33,6 +33,7 @@ class DevConnectHost implements vscode.WebviewViewProvider, vscode.Disposable {
     private readonly noticeDir: string | undefined,
     private readonly toastScript: string,
     private readonly output: vscode.OutputChannel,
+    private readonly globalState: vscode.Memento,
   ) {
     this.statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 0);
     this.statusBar.command = "devconnect.open";
@@ -58,7 +59,7 @@ class DevConnectHost implements vscode.WebviewViewProvider, vscode.Disposable {
   async start(): Promise<void> {
     if (this.started) return;
     this.started = true;
-    this.flow.setNotices(readNoticePrefs());
+    this.flow.setNotices(readNoticePrefs(this.globalState));
     await this.flow.bootstrap();
     this.renderStatus();
     await this.consumePending();
@@ -102,7 +103,7 @@ class DevConnectHost implements vscode.WebviewViewProvider, vscode.Disposable {
 
   reloadConfig(): void {
     this.flow.reloadConfig(readApiConfigFromWorkspace());
-    this.flow.setNotices(readNoticePrefs());
+    this.flow.setNotices(readNoticePrefs(this.globalState));
     this.socketToken = undefined;
     void this.syncChat();
   }
@@ -194,7 +195,7 @@ class DevConnectHost implements vscode.WebviewViewProvider, vscode.Disposable {
     frame: Parameters<typeof messageFromFrame>[0],
     conversations: readonly { id: string; peerDisplayName?: string; peerUsername?: string }[],
   ): Promise<void> {
-    const prefs = readNoticePrefs();
+    const prefs = readNoticePrefs(this.globalState);
     const message = messageFromFrame(frame);
     const selfId = this.auth.getUser()?.id;
     if (message?.deletedForEveryone || frame.type === "MESSAGE_DELETED" || frame.type === "MESSAGE_HIDDEN") return;
@@ -348,7 +349,7 @@ class DevConnectHost implements vscode.WebviewViewProvider, vscode.Disposable {
   private async recoverMissedNotices(): Promise<void> {
     try {
       const list = await this.auth.loadNotifications();
-      const prefs = readNoticePrefs();
+      const prefs = readNoticePrefs(this.globalState);
       for (const note of list.items) {
         if (note.type === "NEW_MESSAGE" && note.referenceId) {
           const decision = resolveMessageNotice({
@@ -425,7 +426,15 @@ class DevConnectHost implements vscode.WebviewViewProvider, vscode.Disposable {
             ? "notifyFriendAccepted"
             : "";
       if (setting && typeof message.enabled === "boolean") {
-        await vscode.workspace.getConfiguration("devconnect").update(setting, message.enabled, vscode.ConfigurationTarget.Global);
+        const current = readNoticePrefs(this.globalState);
+        const next = {
+          messages: setting === "notifyMessages" ? message.enabled : current.messages,
+          friendRequests: setting === "notifyFriendRequests" ? message.enabled : current.friendRequests,
+          friendAccepted: setting === "notifyFriendAccepted" ? message.enabled : current.friendAccepted,
+        };
+        await this.globalState.update(NOTICE_PREFS_KEY, next);
+        this.flow.setNotices(next);
+        this.pushState();
       }
       return;
     }
@@ -449,12 +458,15 @@ export function readApiConfigFromWorkspace() {
   });
 }
 
-function readNoticePrefs(): NoticePrefs {
+const NOTICE_PREFS_KEY = "devconnect.noticePrefs";
+
+function readNoticePrefs(globalState: vscode.Memento): NoticePrefs {
+  const stored = globalState.get<NoticePrefs>(NOTICE_PREFS_KEY);
   const settings = vscode.workspace.getConfiguration("devconnect");
   return {
-    messages: settings.get<boolean>("notifyMessages") ?? true,
-    friendRequests: settings.get<boolean>("notifyFriendRequests") ?? true,
-    friendAccepted: settings.get<boolean>("notifyFriendAccepted") ?? true,
+    messages: stored?.messages ?? settings.get<boolean>("notifyMessages") ?? true,
+    friendRequests: stored?.friendRequests ?? settings.get<boolean>("notifyFriendRequests") ?? true,
+    friendAccepted: stored?.friendAccepted ?? settings.get<boolean>("notifyFriendAccepted") ?? true,
   };
 }
 
@@ -473,7 +485,7 @@ export function activate(context: vscode.ExtensionContext): void {
   }
 
   const output = vscode.window.createOutputChannel("DevConnect");
-  const host = new DevConnectHost(auth, join(context.globalStorageUri.fsPath, "notices"), windowsToastScriptPath(context.extensionUri.fsPath), output);
+  const host = new DevConnectHost(auth, join(context.globalStorageUri.fsPath, "notices"), windowsToastScriptPath(context.extensionUri.fsPath), output, context.globalState);
   context.subscriptions.push(output, vscode.window.registerUriHandler({
     handleUri(uri) {
       host.openFromNotice(uri);
