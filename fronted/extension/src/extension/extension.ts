@@ -47,7 +47,7 @@ class DevConnectHost implements vscode.WebviewViewProvider, vscode.Disposable {
         ?? vscode.Uri.file(process.env.USERPROFILE || process.env.HOME || ".");
       const target = await vscode.window.showSaveDialog({ defaultUri: vscode.Uri.joinPath(base, name), saveLabel: "Save file" });
       if (target) await vscode.workspace.fs.writeFile(target, bytes);
-    });
+    }, (line) => this.output.appendLine(line));
   }
 
   dispose(): void {

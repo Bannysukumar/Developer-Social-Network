@@ -76,17 +76,52 @@ export function applyTombstone<T extends { id: string; ciphertext?: string | nul
   return changed ? next : undefined;
 }
 
-export function mergeHistory<T extends MessageDto & { displayText?: string }>(current: readonly T[], fetched: readonly T[]): T[] {
-  const previous = new Map(current.map((item) => [item.id, item]));
-  return fetched.map((item) => {
-    const existing = previous.get(item.id);
-    if (!existing) return item;
-    if (existing.deletedForEveryone || item.deletedForEveryone) {
-      return { ...item, ciphertext: "", deletedForEveryone: true, displayText: "This message was deleted" };
-    }
-    const kept = (statusRank[existing.status] ?? 0) > (statusRank[item.status] ?? 0) ? existing.status : item.status;
-    return kept === item.status ? item : { ...item, status: kept };
+function preferStoredHistory<T extends MessageDto & { displayText?: string }>(existing: T, item: T): T {
+  if (existing.deletedForEveryone || item.deletedForEveryone) {
+    return { ...item, ciphertext: "", deletedForEveryone: true, displayText: "This message was deleted" };
+  }
+  const kept = (statusRank[existing.status] ?? 0) > (statusRank[item.status] ?? 0) ? existing.status : item.status;
+  return kept === item.status ? item : { ...item, status: kept };
+}
+
+function newestFirst<T extends { id?: string; createdAt?: string | null }>(items: readonly T[]): T[] {
+  return [...items].sort((left, right) => {
+    const leftTime = left.createdAt ? Date.parse(left.createdAt) : Number.NaN;
+    const rightTime = right.createdAt ? Date.parse(right.createdAt) : Number.NaN;
+    const leftMissing = Number.isNaN(leftTime);
+    const rightMissing = Number.isNaN(rightTime);
+    if (leftMissing && rightMissing) return (right.id ?? "").localeCompare(left.id ?? "");
+    if (leftMissing) return -1;
+    if (rightMissing) return 1;
+    if (rightTime !== leftTime) return rightTime - leftTime;
+    return (right.id ?? "").localeCompare(left.id ?? "");
   });
+}
+
+/**
+ * Combines one conversation's loaded page with messages already on screen.
+ * Messages from other conversations are dropped. Live messages missing from the page are kept.
+ * The result stays newest-first, matching the history API.
+ */
+export function mergeHistory<T extends MessageDto & { displayText?: string }>(current: readonly T[], fetched: readonly T[]): T[] {
+  const scope = fetched.find((item) => item.conversationId)?.conversationId;
+  if (!scope) {
+    const previous = new Map(current.map((item) => [item.id, item]));
+    return fetched.map((item) => {
+      const existing = previous.get(item.id);
+      return existing ? preferStoredHistory(existing, item) : item;
+    });
+  }
+  const merged = new Map<string, T>();
+  for (const item of current) {
+    if (item.conversationId === scope) merged.set(item.id, item);
+  }
+  for (const item of fetched) {
+    if (item.conversationId !== scope) continue;
+    const existing = merged.get(item.id);
+    merged.set(item.id, existing ? preferStoredHistory(existing, item) : item);
+  }
+  return newestFirst([...merged.values()]);
 }
 
 export function mergeReceipt(messages: readonly MessageDto[], frame: ServerFrame): MessageDto[] | undefined {

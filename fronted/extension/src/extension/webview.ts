@@ -12,6 +12,7 @@ import type { ScreenId } from "../shared/flow";
 import type { HostMessage } from "../shared/protocol";
 import type { DisplayMessage } from "./auth-service";
 import { chatActivity } from "./presence-state";
+import { dateSeparatorLabel, shouldLoadOlderHistory } from "./date-label";
 import { TYPING_IDLE_MS, typingCommand } from "./typing-debounce";
 
 export interface HostState {
@@ -52,6 +53,9 @@ export interface HostState {
   readonly conversationPreviews: Readonly<Record<string, string>>;
   readonly presenceByUser: Readonly<Record<string, { status: "ONLINE" | "OFFLINE"; lastSeenAt?: string | null }>>;
   readonly typing: { conversationId: string; userId: string } | null;
+  readonly historyHasMore: boolean;
+  readonly historyLoading: boolean;
+  readonly historyError: string | null;
 }
 
 export function emptyHostState(): HostState {
@@ -93,6 +97,9 @@ export function emptyHostState(): HostState {
     conversationPreviews: {},
     presenceByUser: {},
     typing: null,
+    historyHasMore: false,
+    historyLoading: false,
+    historyError: null,
   };
 }
 
@@ -168,6 +175,9 @@ export function renderWebview(webview: Webview, state: HostState): string {
   p { margin: 0; }
   .muted { color: var(--vscode-descriptionForeground); font-size: 12px; line-height: 1.45; }
   .stack { display: grid; gap: 8px; }
+  section[data-screen="messages"]:not([hidden]) { display: flex; flex-direction: column; flex: 1; min-height: 0; height: 100%; overflow: hidden; }
+  section[data-screen="messages"] #thread:not([hidden]) { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+  section[data-screen="messages"] #inbox { min-height: 0; overflow: auto; }
   .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
   label { display: grid; gap: 4px; font-size: 12px; color: var(--vscode-descriptionForeground); }
   input, textarea, select { width: 100%; min-height: 32px; padding: 6px 8px; border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)); border-radius: 6px; background: var(--vscode-input-background); color: var(--vscode-input-foreground); }
@@ -270,6 +280,8 @@ export function renderWebview(webview: Webview, state: HostState): string {
   .toast { position: sticky; bottom: 8px; margin: 8px 12px; padding: 8px 10px; border-radius: 8px; background: var(--vscode-notifications-background, var(--vscode-editorWidget-background)); color: var(--vscode-notifications-foreground, var(--vscode-foreground)); border: 1px solid var(--vscode-notifications-border, var(--vscode-panel-border)); }
   .status { margin-left: auto; font-size: 11px; color: var(--vscode-descriptionForeground); }
   #message-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; justify-content: flex-start; align-items: flex-start; gap: 8px; padding: 4px 0; }
+  .day-sep { align-self: center; margin: 6px 0 2px; padding: 3px 10px; border-radius: 999px; font-size: 11px; background: var(--vscode-badge-background, var(--vscode-editorWidget-background)); color: var(--vscode-badge-foreground, var(--vscode-foreground)); }
+  .history-note { align-self: center; font-size: 12px; }
   .empty { display: grid; gap: 6px; padding: 20px 4px; }
   .skel { height: 12px; border-radius: 4px; background: color-mix(in srgb, var(--vscode-descriptionForeground) 22%, transparent); }
   .skel-row { height: 44px; border-radius: 8px; background: color-mix(in srgb, var(--vscode-descriptionForeground) 12%, transparent); }
@@ -559,7 +571,7 @@ export function renderWebview(webview: Webview, state: HostState): string {
         <button class="btn quiet" type="button" data-settings="menu">Settings</button>
         <h1>About</h1>
         <p>DevConnect</p>
-        <p class="muted" id="about-version">Version 0.4.38</p>
+        <p class="muted" id="about-version">Version 0.4.40</p>
         <p class="muted">A developer network inside Visual Studio Code. Messages stay encrypted on your devices.</p>
       </div>
     </section>
@@ -593,6 +605,7 @@ export function renderWebview(webview: Webview, state: HostState): string {
   let chatQuery = "";
     let lastThreadId = "";
     let lastMessageCount = 0;
+    let lastNewestId = "";
     let openMenuId = "";
   let heldNew = 0;
   let publishedViewing = "";
@@ -618,6 +631,9 @@ export function renderWebview(webview: Webview, state: HostState): string {
   let editing = false;
   let dialogAction = null;
 
+  const dateSeparatorLabel = ${dateSeparatorLabel.toString()};
+  const shouldLoadOlderHistory = ${shouldLoadOlderHistory.toString()};
+  let olderRequestArmed = true;
   function esc(value) {
     return String(value ?? "").replace(/[&<>"']/g, (ch) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" })[ch]);
   }
@@ -886,12 +902,26 @@ export function renderWebview(webview: Webview, state: HostState): string {
     const previousTop = list.scrollTop;
     const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 48;
     const ordered = (state.messages || []).slice().reverse();
-    if (state.activeConversationId !== lastThreadId) {
+    const switchedThread = state.activeConversationId !== lastThreadId;
+    if (switchedThread) {
       lastThreadId = state.activeConversationId || "";
       lastMessageCount = 0;
+      lastNewestId = "";
       heldNew = 0;
     }
-    list.innerHTML = ordered.length ? ordered.map((m) => {
+    const newestId = ordered.length ? ordered[ordered.length - 1].id : "";
+    const olderPage = !switchedThread && ordered.length > lastMessageCount && newestId === lastNewestId && lastNewestId !== "";
+    const previousHeight = list.scrollHeight;
+    let lastDay = "";
+    const nowMs = Date.now();
+    const historyBanner = ordered.length && state.historyLoading
+      ? '<div class="history-note muted">Loading earlier messages…</div>'
+      : ordered.length && state.historyError
+        ? '<div class="history-note"><span>' + esc(state.historyError) + '</span> <button class="btn" type="button" data-act="load-older">Try again</button></div>'
+        : "";
+    const threadBody = ordered.length ? ordered.map((m) => {
+      const day = dateSeparatorLabel(m.createdAt, nowMs);
+      const separator = day && day !== lastDay ? (lastDay = day, '<div class="day-sep">' + esc(day) + '</div>') : "";
       const mine = !!(state.user && m.senderId === state.user.id);
       const failed = m.sendState === "failed";
       const deleted = !!m.deletedForEveryone;
@@ -928,9 +958,19 @@ export function renderWebview(webview: Webview, state: HostState): string {
       const retryFiles = (m.attachments || []).length && m.id.indexOf("local-") === 0
         ? '<button class="btn" type="button" data-act="retry-files" data-id="' + esc(m.id) + '">Retry</button>'
         : retry;
-      return '<div class="msg ' + (mine ? "mine" : "theirs") + (failed ? " failed" : "") + (deleted ? " deleted" : "") + '">' + (deleted ? "" : files) + (m.displayText ? esc(m.displayText) : "") + '<div class="msg-meta">' + esc(clock(m.createdAt)) + receipt + actions + '</div>' + menu + (failed ? '<div class="msg-meta">' + esc(m.sendError || "Message failed to send.") + '</div>' + retryFiles : "") + '</div>';
-    }).join("") : '<div class="chat-empty">' + avatarMarkup({ displayName: person.name, username: person.username }, "lg") + '<strong>You\\'re connected with ' + esc(person.name) + '</strong><span class="muted">Start the conversation by saying hello.</span></div>';
-    if (nearBottom || ordered.length < 2) {
+      return separator + '<div class="msg ' + (mine ? "mine" : "theirs") + (failed ? " failed" : "") + (deleted ? " deleted" : "") + '">' + (deleted ? "" : files) + (m.displayText ? esc(m.displayText) : "") + '<div class="msg-meta">' + esc(clock(m.createdAt)) + receipt + actions + '</div>' + menu + (failed ? '<div class="msg-meta">' + esc(m.sendError || "Message failed to send.") + '</div>' + retryFiles : "") + '</div>';
+    }).join("") : state.historyLoading
+      ? '<div class="history-note muted">Loading messages…</div>'
+      : (state.historyError || state.error)
+        ? '<div class="history-note"><span>' + esc(state.historyError || state.error) + '</span> <button class="btn" type="button" data-act="reopen-chat">Try again</button></div>'
+        : '<div class="chat-empty">' + avatarMarkup({ displayName: person.name, username: person.username }, "lg") + '<strong>You\\'re connected with ' + esc(person.name) + '</strong><span class="muted">Start the conversation by saying hello.</span></div>';
+    list.innerHTML = historyBanner + threadBody;
+    if (switchedThread) {
+      list.scrollTop = list.scrollHeight;
+      heldNew = 0;
+    } else if (olderPage) {
+      list.scrollTop = previousTop + (list.scrollHeight - previousHeight);
+    } else if (nearBottom || ordered.length < 2) {
       list.scrollTop = list.scrollHeight;
       heldNew = 0;
     } else {
@@ -938,6 +978,8 @@ export function renderWebview(webview: Webview, state: HostState): string {
       if (ordered.length > lastMessageCount) heldNew += ordered.length - lastMessageCount;
     }
     lastMessageCount = ordered.length;
+    lastNewestId = newestId;
+    if (!state.historyLoading) olderRequestArmed = true;
     const jump = document.getElementById("jump-latest");
     jump.hidden = heldNew === 0 || !state.activeConversationId;
     jump.textContent = "↓ " + heldNew + (heldNew === 1 ? " new message" : " new messages");
@@ -1110,6 +1152,8 @@ export function renderWebview(webview: Webview, state: HostState): string {
     }
     if (act === "message") vscode.postMessage({ version: 1, type: "openConversation", participantId: id });
     if (act === "open-chat") vscode.postMessage({ version: 1, type: "openConversation", conversationId: id });
+    if (act === "load-older") vscode.postMessage({ version: 1, type: "loadOlderMessages" });
+    if (act === "reopen-chat" && state.activeConversationId) vscode.postMessage({ version: 1, type: "openConversation", conversationId: state.activeConversationId });
     if (act === "open-note") vscode.postMessage({ version: 1, type: "openNotification", notificationId: id });
     if (act === "revoke") vscode.postMessage({ version: 1, type: "revokeDevice", deviceId: id });
     if (act === "message-menu") {
@@ -1422,6 +1466,19 @@ export function renderWebview(webview: Webview, state: HostState): string {
     heldNew = 0;
     document.getElementById("jump-latest").hidden = true;
   });
+  document.getElementById("message-list").addEventListener("scroll", () => {
+    const list = document.getElementById("message-list");
+    if (!olderRequestArmed) return;
+    if (!shouldLoadOlderHistory({
+      hasMore: state.historyHasMore === true,
+      loading: state.historyLoading === true,
+      scrollTop: list.scrollTop,
+      scrollHeight: list.scrollHeight,
+      clientHeight: list.clientHeight,
+    })) return;
+    olderRequestArmed = false;
+    vscode.postMessage({ version: 1, type: "loadOlderMessages" });
+  });
   document.getElementById("retry").addEventListener("click", () => vscode.postMessage({ version: 1, type: "retry" }));
   document.getElementById("read-all").addEventListener("click", () => vscode.postMessage({ version: 1, type: "markAllNotificationsRead" }));
   document.getElementById("resend-verify").addEventListener("click", () => vscode.postMessage({ version: 1, type: "resendVerification" }));
@@ -1430,6 +1487,12 @@ export function renderWebview(webview: Webview, state: HostState): string {
   document.addEventListener("visibilitychange", () => publishViewing());
   window.addEventListener("focus", () => publishViewing());
   window.addEventListener("blur", () => publishViewing());
+  function refreshAtMidnight() {
+    const now = new Date();
+    const next = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 1);
+    window.setTimeout(() => { apply(state); refreshAtMidnight(); }, Math.max(1000, next.getTime() - now.getTime()));
+  }
+  refreshAtMidnight();
   apply(state);
         vscode.postMessage({ version: 1, type: "ready" });
       })();
@@ -1477,10 +1540,13 @@ export function createStateMessage(state: HostState): HostMessage {
     notifyFriendRequests: state.notifyFriendRequests !== false,
     notifyFriendAccepted: state.notifyFriendAccepted !== false,
     friendsPanel: state.friendsPanel || "friends",
-    friendsPanelSeq: state.friendsPanelSeq || 0,
+    friendsPanelSeq: state.friendsPanelSeq,
     unreadByConversation: { ...(state.unreadByConversation || {}) },
     conversationPreviews: { ...(state.conversationPreviews || {}) },
     presenceByUser: { ...(state.presenceByUser || {}) },
-    typing: state.typing ?? null,
+    typing: state.typing,
+    historyHasMore: state.historyHasMore === true,
+    historyLoading: state.historyLoading === true,
+    historyError: state.historyError ?? null,
   };
 }

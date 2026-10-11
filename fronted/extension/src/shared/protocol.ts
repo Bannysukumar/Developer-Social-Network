@@ -128,6 +128,7 @@ export const webviewMessageSchema = z.discriminatedUnion("type", [
     userId: z.string().min(1),
   }).strict(),
   z.object({ version: z.literal(1), type: z.literal("loadConversations") }).strict(),
+  z.object({ version: z.literal(1), type: z.literal("loadOlderMessages") }).strict(),
   z.object({ version: z.literal(1), type: z.literal("closeThread") }).strict(),
   z.object({ version: z.literal(1), type: z.literal("retry") }).strict(),
   z.object({
@@ -279,6 +280,9 @@ export const hostMessageSchema = z.object({
     conversationId: z.string().min(1),
     userId: z.string().min(1),
   }).nullable(),
+  historyHasMore: z.boolean(),
+  historyLoading: z.boolean(),
+  historyError: z.string().nullable(),
 }).strict();
 
 export type HostMessage = z.infer<typeof hostMessageSchema>;

@@ -41,6 +41,9 @@ const host = {
   conversationPreviews: {},
   presenceByUser: {},
   typing: null,
+  historyHasMore: false,
+  historyLoading: false,
+  historyError: null,
 };
 
 describe("Webview bridge protocol", () => {

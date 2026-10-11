@@ -24,6 +24,12 @@ export class SessionFlow {
   private conversations: HostState["conversations"] = [];
   private activeConversationId: string | null = null;
   private messages: HostState["messages"] = [];
+  private messageCursor: string | null = null;
+  private messageHasMore = false;
+  private historyLoading = false;
+  private historyError: string | null = null;
+  private historyEpoch = 0;
+  private readonly historyCache = new Map<string, { messages: HostState["messages"]; cursor: string | null; hasMore: boolean }>();
   private notifications: HostState["notifications"] = [];
   private unreadNotifications = 0;
   private unreadMessages = 0;
@@ -67,6 +73,7 @@ export class SessionFlow {
     private readonly auth: AuthService,
     private readonly onChange: () => void,
     private readonly saveFile: (name: string, bytes: Uint8Array) => Promise<void> = async () => undefined,
+    private readonly log: (line: string) => void = () => undefined,
   ) {}
 
   reloadConfig(config: ApiConfig): void {
@@ -81,6 +88,126 @@ export class SessionFlow {
       this.error = this.auth.userFacingError(error);
     }
     this.pushState();
+  }
+
+  private beginHistory(): number {
+    this.historyEpoch += 1;
+    this.historyLoading = true;
+    this.historyError = null;
+    return this.historyEpoch;
+  }
+
+  private resetHistory(): void {
+    this.historyEpoch += 1;
+    this.messageCursor = null;
+    this.messageHasMore = false;
+    this.historyLoading = false;
+    this.historyError = null;
+  }
+
+  private acceptHistory(opened: { conversation: { id: string }; messages: HostState["messages"]; nextCursor: string | null; hasNext: boolean }): void {
+    this.activeConversationId = opened.conversation.id;
+    this.messages = mergeHistory(this.messages, opened.messages);
+    this.messageCursor = opened.nextCursor;
+    this.messageHasMore = opened.hasNext;
+    this.historyLoading = false;
+    this.historyError = null;
+  }
+
+  private rememberHistoryCache(): void {
+    const id = this.activeConversationId;
+    if (!id || this.historyLoading) return;
+    const messages = this.messages.filter((item) => item.conversationId === id);
+    this.historyCache.delete(id);
+    this.historyCache.set(id, { messages, cursor: this.messageCursor, hasMore: this.messageHasMore });
+    while (this.historyCache.size > 8) {
+      const oldest = this.historyCache.keys().next().value;
+      if (oldest === undefined) break;
+      this.historyCache.delete(oldest);
+    }
+  }
+
+  private async openThread(message: { conversationId?: string; participantId?: string }): Promise<void> {
+    if (!this.auth.isAuthenticated()) return;
+    const cached = message.conversationId ? this.historyCache.get(message.conversationId) : undefined;
+    if (cached && message.conversationId) {
+      this.activeConversationId = message.conversationId;
+      this.messages = cached.messages;
+      this.messageCursor = cached.cursor;
+      this.messageHasMore = cached.hasMore;
+      this.historyLoading = false;
+      this.historyError = null;
+      this.finishOpen(message.conversationId);
+      this.pushState();
+      return;
+    }
+    const epoch = this.beginHistory();
+    if (message.conversationId) {
+      this.activeConversationId = message.conversationId;
+      this.messages = [];
+    }
+    this.show("messages", this.screen !== "messages");
+    this.pushState();
+    const started = Date.now();
+    try {
+      const opened = await this.auth.openConversation({
+        conversationId: message.conversationId,
+        participantId: message.participantId,
+      });
+      this.log(`history first-page conversationId=${opened.conversation.id} messages=${opened.messages.length} hasMore=${opened.hasNext} ms=${Date.now() - started}`);
+      if (epoch !== this.historyEpoch) return;
+      this.acceptHistory(opened);
+      this.finishOpen(opened.conversation.id, opened.messages[0]?.displayText, opened.conversation.participantIds);
+      this.pushState();
+      this.conversations = await this.auth.listConversations();
+      if (epoch === this.historyEpoch) this.pushState();
+    } catch (error) {
+      if (isAuthenticationFailure(error) || !this.auth.isAuthenticated()) throw error;
+      if (epoch !== this.historyEpoch) return;
+      this.historyLoading = false;
+      this.historyError = this.auth.userFacingError(error);
+      this.pushState();
+    }
+  }
+
+  private finishOpen(conversationId: string, preview?: string, participantIds?: readonly string[]): void {
+    if (preview) this.rememberPreview(conversationId, preview);
+    for (const item of this.messages) {
+      if (item.conversationId === conversationId) this.seenMessageIds.add(item.id);
+    }
+    delete this.unreadByConversation[conversationId];
+    this.unreadMessages = Object.values(this.unreadByConversation).reduce((sum, count) => sum + count, 0);
+    this.scheduleConversationRead(conversationId);
+    this.scheduleNotificationRead(conversationId);
+    this.show("messages", this.screen !== "messages");
+    void this.syncMessageLock(participantIds);
+  }
+
+  private async loadOlderMessages(): Promise<void> {
+    const conversationId = this.activeConversationId;
+    const cursor = this.messageCursor;
+    if (!conversationId || !cursor || !this.messageHasMore || this.historyLoading) return;
+    const epoch = this.historyEpoch;
+    this.historyLoading = true;
+    this.historyError = null;
+    this.pushState();
+    const started = Date.now();
+    try {
+      const page = await this.auth.loadOlderMessages(conversationId, cursor);
+      if (epoch !== this.historyEpoch || this.activeConversationId !== conversationId) return;
+      this.messages = mergeHistory(this.messages, page.messages);
+      this.messageCursor = page.nextCursor;
+      this.messageHasMore = page.hasNext;
+      this.log(`history older-page conversationId=${conversationId} messages=${page.messages.length} hasMore=${page.hasNext} ms=${Date.now() - started}`);
+    } catch (error) {
+      if (epoch !== this.historyEpoch) return;
+      this.historyError = this.auth.userFacingError(error);
+    } finally {
+      if (epoch === this.historyEpoch) {
+        this.historyLoading = false;
+        this.pushState();
+      }
+    }
   }
 
   snapshot(): HostState {
@@ -124,6 +251,9 @@ export class SessionFlow {
       conversationPreviews: { ...this.conversationPreviews },
       presenceByUser: { ...this.presenceByUser },
       typing: this.typing,
+      historyHasMore: this.messageHasMore,
+      historyLoading: this.historyLoading,
+      historyError: this.historyError,
     };
   }
 
@@ -135,6 +265,7 @@ export class SessionFlow {
   }
 
   private pushState(): void {
+    this.rememberHistoryCache();
     this.onChange();
     this.scheduleImages();
   }
@@ -326,6 +457,7 @@ export class SessionFlow {
     this.conversations = [];
     this.activeConversationId = null;
     this.messages = [];
+    this.resetHistory();
     this.notifications = [];
     this.unreadNotifications = 0;
     this.unreadMessages = 0;
@@ -335,6 +467,7 @@ export class SessionFlow {
     if (this.typingTimer) clearTimeout(this.typingTimer);
     this.typingTimer = undefined;
     this.seenMessageIds.clear();
+    this.historyCache.clear();
     this.confirmedNotificationReads.clear();
     this.optimisticNotificationReads.clear();
     this.notificationAckInflight.clear();
@@ -394,16 +527,7 @@ export class SessionFlow {
     const screen = route?.screen;
     if (screen === "messages" && route?.conversationId) {
       try {
-        const opened = await this.auth.openConversation({ conversationId: route.conversationId });
-        this.activeConversationId = opened.conversation.id;
-        this.messages = mergeHistory(this.messages, opened.messages);
-        this.pushState();
-        this.rememberPreview(opened.conversation.id, opened.messages[0]?.displayText);
-        for (const item of opened.messages) this.seenMessageIds.add(item.id);
-        this.scheduleConversationRead(opened.conversation.id);
-        await this.syncMessageLock(opened.conversation.participantIds);
-        this.show("messages", false);
-        this.scheduleNotificationRead(opened.conversation.id);
+        await this.openThread({ conversationId: route.conversationId });
         return;
       } catch (error) {
         if (isAuthenticationFailure(error) || !this.auth.isAuthenticated()) throw error;
@@ -464,9 +588,18 @@ export class SessionFlow {
     if (message.type === "closeThread") {
       this.activeConversationId = null;
       this.messages = [];
+      this.resetHistory();
       this.messageLock = "none";
       this.error = null;
       this.pushState();
+      return;
+    }
+    if (message.type === "loadOlderMessages") {
+      void this.loadOlderMessages();
+      return;
+    }
+    if (message.type === "openConversation") {
+      await this.openThread(message);
       return;
     }
     if (message.type === "navigate") {
@@ -634,19 +767,7 @@ export class SessionFlow {
     await this.acknowledgeTarget(target.notificationId, target.conversationId);
     this.pushState();
     if (target.conversationId) {
-      const opened = await this.auth.openConversation({ conversationId: target.conversationId });
-      this.activeConversationId = opened.conversation.id;
-      this.messages = mergeHistory(this.messages, opened.messages);
-        this.pushState();
-      this.rememberPreview(opened.conversation.id, opened.messages[0]?.displayText);
-      for (const item of opened.messages) this.seenMessageIds.add(item.id);
-      this.scheduleConversationRead(opened.conversation.id);
-      delete this.unreadByConversation[opened.conversation.id];
-      this.unreadMessages = Object.values(this.unreadByConversation).reduce((sum, count) => sum + count, 0);
-      this.conversations = await this.auth.listConversations();
-      await this.syncMessageLock(opened.conversation.participantIds);
-      this.show("messages", false);
-      this.scheduleNotificationRead(opened.conversation.id);
+      await this.openThread({ conversationId: target.conversationId });
     } else if (target.userId) {
       this.selectedUser = await this.auth.getUserById(target.userId);
       this.show("user", false);
@@ -830,25 +951,6 @@ export class SessionFlow {
         case "loadConversations":
           this.conversations = await this.auth.listConversations();
           break;
-        case "openConversation": {
-          const opened = await this.auth.openConversation({
-            conversationId: message.conversationId,
-            participantId: message.participantId,
-          });
-          this.activeConversationId = opened.conversation.id;
-          this.messages = mergeHistory(this.messages, opened.messages);
-        this.pushState();
-          this.rememberPreview(opened.conversation.id, opened.messages[0]?.displayText);
-          for (const item of opened.messages) this.seenMessageIds.add(item.id);
-          delete this.unreadByConversation[opened.conversation.id];
-          this.scheduleConversationRead(opened.conversation.id);
-          this.unreadMessages = Object.values(this.unreadByConversation).reduce((sum, count) => sum + count, 0);
-          this.conversations = await this.auth.listConversations();
-          await this.syncMessageLock(opened.conversation.participantIds);
-          this.show("messages", this.screen !== "messages");
-          this.scheduleNotificationRead(opened.conversation.id);
-          break;
-        }
         case "deleteMessage": {
           const updated = await this.auth.deleteMessage(message.messageId, message.scope);
           if (message.scope === "me") {
@@ -1029,18 +1131,7 @@ export class SessionFlow {
             this.pushState();
           }
           if (note?.type === "NEW_MESSAGE" && note.referenceId) {
-            const opened = await this.auth.openConversation({ conversationId: note.referenceId });
-            this.activeConversationId = opened.conversation.id;
-            this.messages = mergeHistory(this.messages, opened.messages);
-        this.pushState();
-            this.rememberPreview(opened.conversation.id, opened.messages[0]?.displayText);
-            for (const item of opened.messages) this.seenMessageIds.add(item.id);
-        this.scheduleConversationRead(opened.conversation.id);
-            delete this.unreadByConversation[opened.conversation.id];
-            this.unreadMessages = Object.values(this.unreadByConversation).reduce((sum, count) => sum + count, 0);
-            await this.syncMessageLock(opened.conversation.participantIds);
-            this.show("messages", true);
-            this.scheduleNotificationRead(opened.conversation.id);
+            void this.openThread({ conversationId: note.referenceId });
           } else if (note?.type === "FRIEND_REQUEST_ACCEPTED" && note.actorId) {
             this.selectedUser = await this.auth.getUserById(note.actorId);
             this.show("user", true);
@@ -1097,6 +1188,7 @@ export class SessionFlow {
       } else {
         this.error = this.auth.userFacingError(error);
       }
+      if (message.type === "openConversation") this.historyLoading = false;
     } finally {
       this.busy = false;
       this.pushState();

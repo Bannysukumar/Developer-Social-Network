@@ -288,7 +288,7 @@ export class AuthService {
   async openConversation(options: {
     conversationId?: string;
     participantId?: string;
-  }): Promise<{ conversation: ConversationDto; messages: DisplayMessage[] }> {
+  }): Promise<{ conversation: ConversationDto; messages: DisplayMessage[]; nextCursor: string | null; hasNext: boolean }> {
     let conversation: ConversationDto;
     if (options.conversationId) {
       conversation = await this.conversationsApi.get(options.conversationId);
@@ -301,6 +301,17 @@ export class AuthService {
     return {
       conversation,
       messages: page.items.map((message) => this.toDisplayMessage(message)),
+      nextCursor: page.nextCursor,
+      hasNext: page.hasNext,
+    };
+  }
+
+  async loadOlderMessages(conversationId: string, cursor: string): Promise<{ messages: DisplayMessage[]; nextCursor: string | null; hasNext: boolean }> {
+    const page = await this.conversationsApi.listMessages(conversationId, 30, cursor);
+    return {
+      messages: page.items.map((message) => this.displayMessage(message)),
+      nextCursor: page.nextCursor,
+      hasNext: page.hasNext,
     };
   }
 

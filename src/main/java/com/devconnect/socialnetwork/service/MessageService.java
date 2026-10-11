@@ -149,6 +149,7 @@ public class MessageService {
     }
 
     public CursorPageResponse<MessageResponse> list(String userId, String conversationId, String cursor, int limit) {
+        long started = System.nanoTime();
         conversationService.requireMember(userId, conversationId);
         int pageSize = Math.min(Math.max(limit, 1), 50);
         CursorCodec.Cursor decoded = CursorCodec.decode(cursor);
@@ -179,6 +180,13 @@ public class MessageService {
             MessageEntity last = found.get(found.size() - 1);
             next = CursorCodec.encode(last.getCreatedAt(), last.getId());
         }
+        log.info(
+                "History page conversationId={} returned={} hasNext={} ms={}",
+                conversationId,
+                found.size(),
+                hasNext,
+                millis(started, System.nanoTime())
+        );
         return new CursorPageResponse<>(found.stream().map(messageMapper::toResponse).toList(), next, hasNext);
     }
 
