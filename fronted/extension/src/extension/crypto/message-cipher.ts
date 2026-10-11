@@ -72,13 +72,19 @@ export function encryptForDevices(
   return Buffer.from(JSON.stringify(envelope), "utf8").toString("base64");
 }
 
+export const SEALED_MESSAGE_TEXT = "This message is sealed to another installation. It is still saved, but this device does not have the key that can open it.";
+
 export function decryptMessage(ciphertext: string, local: DeviceMaterial | undefined): string | undefined {
   const envelope = readEnvelope(ciphertext);
-  if (!envelope || !local?.deviceId) return undefined;
+  if (!envelope || !local?.signedPreKeyPrivateJwk) return undefined;
   try {
-    if (envelope.sid === local.deviceId) {
-      const selfKey = derive(rawPrivate(local.signedPreKeyPrivateJwk), "devconnect-self-v1");
-      return open(envelope.selfCt, envelope.selfIv, envelope.selfTag, selfKey, envelope.cid);
+    if (envelope.selfCt && envelope.selfIv && envelope.selfTag) {
+      try {
+        const selfKey = derive(rawPrivate(local.signedPreKeyPrivateJwk), "devconnect-self-v1");
+        return open(envelope.selfCt, envelope.selfIv, envelope.selfTag, selfKey, envelope.cid);
+      } catch {
+        // The self-seal belongs to the sending installation. Try a recipient seal next.
+      }
     }
     const targets: readonly DeviceSeal[] = envelope.v === 1
       ? [{ rid: "", preKeyId: envelope.preKeyId, eph: envelope.eph, iv: envelope.iv, ct: envelope.ct, tag: envelope.tag }]

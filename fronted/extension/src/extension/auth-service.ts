@@ -23,7 +23,8 @@ import type {
   UserSummaryDto,
 } from "../shared/api-types";
 import { createDeviceMaterial, hasVerifiedSignedPreKey, type DeviceMaterial } from "./crypto/device-keys";
-import { decryptMessage, encryptForDevices, isEncryptedEnvelope, type RecipientBundle } from "./crypto/message-cipher";
+import { openKeyBackup, sealKeyBackup } from "./crypto/key-backup";
+import { decryptMessage, encryptForDevices, isEncryptedEnvelope, SEALED_MESSAGE_TEXT, type RecipientBundle } from "./crypto/message-cipher";
 import { openFile, sealFile } from "./crypto/file-cipher";
 import { encodeFilePayload, parseFilePayload, type SharedFile } from "./crypto/file-payload";
 import { decodeOpaqueText } from "../shared/payload";
@@ -322,8 +323,69 @@ export class AuthService {
   }
 
   private keysPublished = false;
+  private holdNewKeys = false;
+
+  async prepareDeviceKeys(): Promise<"ready" | "needed" | "unavailable"> {
+    const stored = await this.session.getDeviceKeys();
+    if (stored || (this.deviceKeys?.identityPrivateJwk && this.deviceKeys.signedPreKeyPrivateJwk)) {
+      this.holdNewKeys = false;
+      await this.ensureDeviceKeys();
+      return "ready";
+    }
+    try {
+      const backup = await this.keysApi.getBackup();
+      if (backup) {
+        this.holdNewKeys = true;
+        return "needed";
+      }
+    } catch {
+      // A missing backup endpoint still lets this device create its own keys.
+    }
+    this.holdNewKeys = false;
+    await this.ensureDeviceKeys();
+    return "unavailable";
+  }
+
+  async saveRecovery(passphrase: string): Promise<void> {
+    await this.ensureDeviceKeys();
+    const keys = this.deviceKeys;
+    if (!keys?.identityPrivateJwk) {
+      throw new ApiError("configuration", "This device has no key to back up yet.");
+    }
+    await this.keysApi.putBackup(sealKeyBackup(JSON.stringify(keys), passphrase));
+  }
+
+  async restoreRecovery(passphrase: string): Promise<void> {
+    const backup = await this.keysApi.getBackup();
+    if (!backup) {
+      throw new ApiError("configuration", "No recovery backup is saved for this account.");
+    }
+    let parsed: DeviceMaterial;
+    try {
+      parsed = JSON.parse(openKeyBackup(backup, passphrase)) as DeviceMaterial;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "That recovery passphrase did not unlock this device.";
+      throw new ApiError("configuration", message);
+    }
+    if (!parsed.identityPrivateJwk || !parsed.signedPreKeyPrivateJwk) {
+      throw new ApiError("configuration", "The recovery data did not contain a usable device key.");
+    }
+    this.deviceKeys = parsed;
+    this.holdNewKeys = false;
+    this.keysPublished = false;
+    await this.session.saveDeviceKeys(JSON.stringify(parsed));
+    await this.ensureDeviceKeys();
+  }
+
+  async skipRecovery(): Promise<void> {
+    this.holdNewKeys = false;
+    await this.ensureDeviceKeys();
+  }
 
   async ensureDeviceKeys(): Promise<void> {
+    if (this.holdNewKeys && !this.deviceKeys?.identityPrivateJwk) {
+      throw new ApiError("configuration", "Restore your recovery passphrase in Settings before sending on this device.");
+    }
     const material = await this.loadDeviceMaterial();
     const userId = this.getUser()?.id;
     if (this.keysPublished && material.deviceId) {
@@ -350,9 +412,11 @@ export class AuthService {
       try {
         await this.uploadPreKeys(material, false);
       } catch {
-        const registered = await this.keysApi.registerIdentity({ publicKey: material.identityPublic });
-        material.deviceId = registered.id;
-        await this.uploadPreKeys(material, true);
+        // Keep this device id. Replacing it would leave messages sealed to the previous id unreadable.
+        this.deviceKeys = material;
+        this.keysPublished = false;
+        await this.session.saveDeviceKeys(JSON.stringify(material));
+        return;
       }
     }
     this.deviceKeys = material;
@@ -517,6 +581,7 @@ export class AuthService {
       ...message,
       displayText: described.displayText,
       attachments: described.attachments,
+      sealed: described.sealed,
     };
   }
 
@@ -524,11 +589,11 @@ export class AuthService {
     try {
       return this.displayMessage(message);
     } catch {
-      return { ...message, displayText: "Encrypted message" };
+      return { ...message, displayText: SEALED_MESSAGE_TEXT, sealed: true };
     }
   }
 
-  private describeMessage(message: MessageDto): { displayText: string; attachments?: readonly SharedFile[] } {
+  private describeMessage(message: MessageDto): { displayText: string; attachments?: readonly SharedFile[]; sealed?: boolean } {
     if (message.deletedForEveryone) return { displayText: "This message was deleted" };
     const ciphertext = message.ciphertext ?? "";
     const decrypted = decryptMessage(ciphertext, this.deviceKeys);
@@ -543,7 +608,7 @@ export class AuthService {
       }
       return { displayText: decrypted };
     }
-    if (isEncryptedEnvelope(ciphertext)) return { displayText: "Encrypted message" };
+    if (isEncryptedEnvelope(ciphertext)) return { displayText: SEALED_MESSAGE_TEXT, sealed: true };
     return { displayText: decodeOpaqueText(ciphertext) };
   }
 

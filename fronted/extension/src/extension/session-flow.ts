@@ -28,6 +28,7 @@ export class SessionFlow {
   private messageHasMore = false;
   private historyLoading = false;
   private historyError: string | null = null;
+  private keyRecovery: "ready" | "needed" | "unavailable" = "ready";
   private historyEpoch = 0;
   private readonly historyCache = new Map<string, { messages: HostState["messages"]; cursor: string | null; hasMore: boolean }>();
   private notifications: HostState["notifications"] = [];
@@ -271,6 +272,7 @@ export class SessionFlow {
       historyHasMore: this.messageHasMore,
       historyLoading: this.historyLoading,
       historyError: this.historyError,
+      keyRecovery: this.keyRecovery,
     };
   }
 
@@ -485,6 +487,7 @@ export class SessionFlow {
     this.typingTimer = undefined;
     this.seenMessageIds.clear();
     this.historyCache.clear();
+    this.keyRecovery = "ready";
     this.confirmedNotificationReads.clear();
     this.optimisticNotificationReads.clear();
     this.notificationAckInflight.clear();
@@ -578,7 +581,9 @@ export class SessionFlow {
     } catch {
       this.blockedUsers = [];
     }
-    await this.auth.ensureDeviceKeys();
+    this.keyRecovery = this.auth.prepareDeviceKeys
+      ? await this.auth.prepareDeviceKeys()
+      : (await this.auth.ensureDeviceKeys(), "ready");
   }
 
   async handleMessage(rawMessage: unknown): Promise<void> {
@@ -1185,6 +1190,22 @@ export class SessionFlow {
           this.notice = "Notifications marked read.";
           break;
         }
+        case "saveRecovery":
+          await this.auth.saveRecovery(message.passphrase);
+          this.keyRecovery = "ready";
+          this.notice = "Recovery passphrase saved. A new installation can open this device's messages with it.";
+          break;
+        case "restoreRecovery":
+          await this.auth.restoreRecovery(message.passphrase);
+          this.keyRecovery = "ready";
+          if (this.activeConversationId) await this.openThread({ conversationId: this.activeConversationId });
+          this.notice = "This device restored the previous installation's key.";
+          break;
+        case "skipRecovery":
+          await this.auth.skipRecovery();
+          this.keyRecovery = "ready";
+          this.notice = "This device has its own key. Messages sealed to the previous installation stay unreadable.";
+          break;
         case "loadDevices":
           this.devices = await this.auth.listDevices();
           this.blockedUsers = await this.auth.blockedUsers();

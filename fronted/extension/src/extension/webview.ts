@@ -56,6 +56,7 @@ export interface HostState {
   readonly historyHasMore: boolean;
   readonly historyLoading: boolean;
   readonly historyError: string | null;
+  readonly keyRecovery?: "ready" | "needed" | "unavailable";
 }
 
 export function emptyHostState(): HostState {
@@ -100,6 +101,7 @@ export function emptyHostState(): HostState {
     historyHasMore: false,
     historyLoading: false,
     historyError: null,
+    keyRecovery: "ready",
   };
 }
 
@@ -194,6 +196,7 @@ export function renderWebview(webview: Webview, state: HostState): string {
   .banner.error { color: var(--vscode-errorForeground); background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent); }
   .banner.notice { background: color-mix(in srgb, var(--vscode-focusBorder) 14%, transparent); }
   .msg { max-width: 78%; align-self: flex-start; padding: 8px 10px; border-radius: 10px; background: color-mix(in srgb, var(--vscode-foreground) 8%, transparent); white-space: pre-wrap; word-break: break-word; }
+  .msg.sealed { font-style: italic; opacity: 0.85; }
   .msg.deleted { font-style: italic; }
   .receipt { font-size: 11px; letter-spacing: -2px; opacity: .75; }
   .receipt.read { color: var(--vscode-textLink-foreground); opacity: 1; }
@@ -564,6 +567,15 @@ export function renderWebview(webview: Webview, state: HostState): string {
       <div id="settings-security" class="stack" hidden>
         <button class="btn quiet" type="button" data-settings="menu">Settings</button>
         <h1>Security</h1>
+        <form id="recovery-form" class="stack">
+          <p class="muted">A recovery passphrase encrypts this device's key before it is saved to your account. The server cannot read the key or your messages. Messages from an installation that was wiped before a passphrase was saved cannot be opened.</p>
+          <label class="field">Recovery passphrase<input name="passphrase" type="password" autocomplete="new-password" minlength="10"></label>
+          <div class="row">
+            <button class="btn primary" type="submit" id="save-recovery">Save recovery passphrase</button>
+            <button class="btn" type="button" id="restore-recovery">Restore this device</button>
+            <button class="btn quiet" type="button" id="skip-recovery">Continue without old messages</button>
+          </div>
+        </form>
         <div id="device-list" class="stack"></div>
         <button class="btn danger" type="button" id="logout-btn">Log out</button>
       </div>
@@ -571,7 +583,7 @@ export function renderWebview(webview: Webview, state: HostState): string {
         <button class="btn quiet" type="button" data-settings="menu">Settings</button>
         <h1>About</h1>
         <p>DevConnect</p>
-        <p class="muted" id="about-version">Version 0.4.43</p>
+        <p class="muted" id="about-version">Version 0.4.44</p>
         <p class="muted">A developer network inside Visual Studio Code. Messages stay encrypted on your devices.</p>
       </div>
     </section>
@@ -916,6 +928,12 @@ export function renderWebview(webview: Webview, state: HostState): string {
     const previousHeight = list.scrollHeight;
     let lastDay = "";
     const nowMs = Date.now();
+    const recoveryBanner = !ordered.some((item) => item.sealed) ? ""
+      : state.keyRecovery === "needed"
+        ? '<p class="muted">This installation has no device key. Open Settings, then Security, and restore your recovery passphrase to read messages from the previous installation.</p>'
+        : state.keyRecovery === "unavailable"
+          ? '<p class="muted">These messages are saved on the server. The previous installation did not leave a recovery passphrase, so this device cannot open them.</p>'
+          : '<p class="muted">Some messages are sealed to another installation. Restore a recovery passphrase from Settings, then Security, if you saved one before that installation was wiped.</p>';
     const historyBanner = ordered.length && state.historyLoading
       ? '<div class="history-note muted">Loading earlier messages…</div>'
       : ordered.length && state.historyError
@@ -961,7 +979,7 @@ export function renderWebview(webview: Webview, state: HostState): string {
       const retryFiles = (m.attachments || []).length && m.id.indexOf("local-") === 0
         ? '<button class="btn" type="button" data-act="retry-files" data-id="' + esc(m.id) + '">Retry</button>'
         : retry;
-      return separator + '<div class="msg ' + (mine ? "mine" : "theirs") + (failed ? " failed" : "") + (deleted ? " deleted" : "") + '">' + (deleted ? "" : files) + (m.displayText ? esc(m.displayText) : "") + '<div class="msg-meta">' + esc(clock(m.createdAt)) + receipt + actions + '</div>' + menu + (failed ? '<div class="msg-meta">' + esc(m.sendError || "Message failed to send.") + '</div>' + retryFiles : "") + '</div>';
+      return separator + '<div class="msg ' + (mine ? "mine" : "theirs") + (failed ? " failed" : "") + (deleted ? " deleted" : "") + (m.sealed ? " sealed" : "") + '">' + (deleted ? "" : files) + (m.displayText ? esc(m.displayText) : "") + '<div class="msg-meta">' + esc(clock(m.createdAt)) + receipt + actions + '</div>' + menu + (failed ? '<div class="msg-meta">' + esc(m.sendError || "Message failed to send.") + '</div>' + retryFiles : "") + '</div>';
       } catch (ignored) {
         return '<div class="msg">' + esc(m && m.displayText ? m.displayText : "Message") + '</div>';
       }
@@ -970,7 +988,7 @@ export function renderWebview(webview: Webview, state: HostState): string {
       : (state.historyError || state.error || savedChat)
         ? '<div class="history-note"><span>' + esc(state.historyError || state.error || "Saved messages did not load.") + '</span> <button class="btn" type="button" data-act="reopen-chat">Try again</button></div>'
         : '<div class="chat-empty">' + avatarMarkup({ displayName: person.name, username: person.username }, "lg") + '<strong>You\\'re connected with ' + esc(person.name) + '</strong><span class="muted">Start the conversation by saying hello.</span></div>';
-    list.innerHTML = historyBanner + threadBody;
+    list.innerHTML = recoveryBanner + historyBanner + threadBody;
     if (switchedThread) {
       list.scrollTop = list.scrollHeight;
       heldNew = 0;
@@ -1093,6 +1111,8 @@ export function renderWebview(webview: Webview, state: HostState): string {
     const attachButton = document.getElementById("attach-btn");
     if (attachMenu) attachMenu.hidden = !attachMenuOpen;
     if (attachButton) attachButton.setAttribute("aria-expanded", attachMenuOpen ? "true" : "false");
+    const skipRecovery = document.getElementById("skip-recovery");
+    if (skipRecovery) skipRecovery.hidden = state.keyRecovery !== "needed";
     document.getElementById("device-list").innerHTML = (state.devices || []).length ? state.devices.map((d) =>
       '<div class="card"><strong>' + esc(d.deviceName || d.id) + '</strong><span class="muted">' + esc(d.platform || "") + '</span><button class="btn" data-act="revoke" data-id="' + esc(d.id) + '">Revoke</button></div>'
     ).join("") : '<p class="muted">No devices listed.</p>';
@@ -1346,6 +1366,19 @@ export function renderWebview(webview: Webview, state: HostState): string {
     reader.readAsDataURL(file);
   });
   document.getElementById("password-form").addEventListener("submit", (e) => { e.preventDefault(); const d = new FormData(e.target); vscode.postMessage({ version: 1, type: "changePassword", currentPassword: String(d.get("currentPassword")||""), newPassword: String(d.get("newPassword")||"") }); e.target.reset(); });
+  document.getElementById("recovery-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const passphrase = String(new FormData(e.target).get("passphrase") || "");
+    vscode.postMessage({ version: 1, type: "saveRecovery", passphrase });
+    e.target.reset();
+  });
+  document.getElementById("restore-recovery").addEventListener("click", () => {
+    const input = document.querySelector("#recovery-form input[name=passphrase]");
+    vscode.postMessage({ version: 1, type: "restoreRecovery", passphrase: input ? input.value : "" });
+  });
+  document.getElementById("skip-recovery").addEventListener("click", () => {
+    vscode.postMessage({ version: 1, type: "skipRecovery" });
+  });
   const riskyExt = new Set(["exe", "bat", "cmd", "com", "msi", "dll", "scr", "ps1", "vbs", "js", "jar", "apk", "sh", "hta"]);
   function addPending(fileList) {
     for (const file of fileList) {
@@ -1556,5 +1589,6 @@ export function createStateMessage(state: HostState): HostMessage {
     historyHasMore: state.historyHasMore === true,
     historyLoading: state.historyLoading === true,
     historyError: state.historyError ?? null,
+    keyRecovery: state.keyRecovery || "ready",
   };
 }

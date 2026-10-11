@@ -210,6 +210,17 @@ export const webviewMessageSchema = z.discriminatedUnion("type", [
   z.object({ version: z.literal(1), type: z.literal("loadDevices") }).strict(),
   z.object({
     version: z.literal(1),
+    type: z.literal("saveRecovery"),
+    passphrase: z.string().min(10).max(200),
+  }).strict(),
+  z.object({
+    version: z.literal(1),
+    type: z.literal("restoreRecovery"),
+    passphrase: z.string().min(1).max(200),
+  }).strict(),
+  z.object({ version: z.literal(1), type: z.literal("skipRecovery") }).strict(),
+  z.object({
+    version: z.literal(1),
     type: z.literal("revokeDevice"),
     deviceId: z.string().min(1),
   }).strict(),
@@ -221,6 +232,7 @@ const displayMessageSchema = messageSchema.extend({
   displayText: z.string(),
   sendState: z.enum(["failed", "sending"]).optional(),
   sendError: z.string().max(200).optional(),
+  sealed: z.boolean().optional(),
   attachments: z.array(z.object({
     id: z.string(),
     name: z.string(),
@@ -283,6 +295,7 @@ export const hostMessageSchema = z.object({
   historyHasMore: z.boolean(),
   historyLoading: z.boolean(),
   historyError: z.string().nullable(),
+  keyRecovery: z.enum(["ready", "needed", "unavailable"]).optional(),
 }).strict();
 
 export type HostMessage = z.infer<typeof hostMessageSchema>;
