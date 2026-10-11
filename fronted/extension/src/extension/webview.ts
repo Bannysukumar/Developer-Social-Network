@@ -214,6 +214,31 @@ export function renderWebview(webview: Webview, state: HostState): string {
   .tabs { display: flex; gap: 4px; }
   .tabs .btn[aria-selected="true"] { background: var(--vscode-list-activeSelectionBackground); color: var(--vscode-list-activeSelectionForeground); border-color: transparent; }
   .splash { min-height: 70vh; display: grid; place-items: center; text-align: center; gap: 8px; }
+  .auth-screen { width: 100%; display: flex; justify-content: center; }
+  .auth-layout { width: min(420px, 100%); }
+  .auth-brand { display: none; }
+  .auth-card { display: grid; gap: 14px; width: 100%; padding: 22px 20px 16px; border: 1px solid var(--vscode-panel-border); border-radius: 16px; background: color-mix(in srgb, var(--vscode-editor-background) 92%, var(--vscode-foreground) 8%); }
+  .auth-logo { width: 44px; height: 44px; display: grid; place-items: center; border-radius: 12px; color: var(--vscode-button-foreground); background: var(--vscode-button-background); }
+  .auth-logo svg { width: 24px; height: 24px; display: block; }
+  .auth-card h1 { font-size: 22px; }
+  .auth-card form.stack { gap: 12px; }
+  .auth-card input { min-height: 40px; padding: 8px 12px; border-radius: 10px; }
+  .auth-card .btn.primary { width: 100%; min-height: 40px; border-radius: 10px; font-weight: 650; }
+  .secret { position: relative; display: block; }
+  .secret input { padding-right: 72px; }
+  .secret .btn { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); min-height: 28px; }
+  .auth-links { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  .auth-foot { margin: 0; padding-top: 12px; border-top: 1px solid var(--vscode-panel-border); text-align: center; }
+  .auth-foot .btn.quiet { display: inline; min-height: 0; padding: 0; vertical-align: baseline; }
+  body.auth-view main { justify-content: center; }
+  body.auth-view #error, body.auth-view #notice, body.auth-view #retry { width: min(420px, 100%); margin-inline: auto; }
+  @supports (justify-content: safe center) { body.auth-view main { justify-content: safe center; } }
+  @container (min-width: 760px) {
+    .auth-layout { width: min(860px, 100%); display: grid; grid-template-columns: minmax(220px, 1fr) minmax(320px, 420px); align-items: center; gap: 36px; }
+    .auth-brand { display: grid; gap: 10px; align-content: center; max-width: 340px; }
+    .auth-brand h2 { margin: 0; font-size: 28px; font-weight: 650; }
+    .auth-brand p { margin: 0; font-size: 14px; line-height: 1.5; }
+  }
   .spinner { width: 28px; height: 28px; margin: 8px auto 0; border: 2px solid var(--vscode-panel-border); border-top-color: var(--vscode-focusBorder); border-radius: 50%; }
   @media (prefers-reduced-motion: no-preference) {
     .spinner { animation: spin 800ms linear infinite; }
@@ -341,9 +366,9 @@ export function renderWebview(webview: Webview, state: HostState): string {
     <span class="status" id="live-status" hidden>Reconnecting…</span>
   </header>
   <main>
-    <p class="banner error" id="error" hidden></p>
+    <p class="banner error" id="error" role="alert" hidden></p>
     <button class="btn" type="button" id="retry" hidden>Try again</button>
-    <p class="banner notice" id="notice" hidden></p>
+    <p class="banner notice" id="notice" role="status" hidden></p>
 
     <section data-screen="splash" class="splash">
       <div>
@@ -354,53 +379,106 @@ export function renderWebview(webview: Webview, state: HostState): string {
       </div>
     </section>
 
-    <section data-screen="login" class="stack" hidden>
-      <h1>Sign in</h1>
-      <p class="muted">Use your DevConnect username or email.</p>
-      <p class="muted" id="http-warn" hidden>This API is HTTP. Do not use a production password here.</p>
-      <form id="login-form" class="stack">
-        <label>Username or email<input name="usernameOrEmail" autocomplete="username" required maxlength="254"></label>
-        <label>Password<span class="row"><input name="password" type="password" autocomplete="current-password" required maxlength="128"><button class="btn" type="button" data-toggle>Show</button></span></label>
-        <button class="btn primary" type="submit">Sign in</button>
-      </form>
-      <div class="row">
-        <button class="btn" type="button" data-go="forgot">Forgot password</button>
-        <button class="btn" type="button" data-go="signup">Create account</button>
+    <section data-screen="login" class="auth-screen" hidden>
+      <div class="auth-layout">
+        <aside class="auth-brand">
+          <div class="auth-logo" aria-hidden="true"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M9.15 3.9 2.9 12l6.25 8.1 1.62-1.25L5.55 12l5.22-6.85L9.15 3.9Zm5.7 0-1.62 1.25L18.45 12l-5.22 6.85 1.62 1.25L21.1 12 14.85 3.9ZM11 9.15h2v5.7h-2v-5.7Z"/></svg></div>
+          <h2>DevConnect</h2>
+          <p class="muted">Connect with developers and message them from Visual Studio Code.</p>
+        </aside>
+        <div class="auth-card">
+          <div class="auth-logo" aria-hidden="true"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M9.15 3.9 2.9 12l6.25 8.1 1.62-1.25L5.55 12l5.22-6.85L9.15 3.9Zm5.7 0-1.62 1.25L18.45 12l-5.22 6.85 1.62 1.25L21.1 12 14.85 3.9ZM11 9.15h2v5.7h-2v-5.7Z"/></svg></div>
+          <div class="stack">
+            <h1>Welcome back</h1>
+            <p class="muted">Sign in to connect with your developer community.</p>
+          </div>
+          <p class="muted" id="http-warn" hidden>This API is HTTP. Do not use a production password here.</p>
+          <form id="login-form" class="stack">
+            <label>Username or email<input name="usernameOrEmail" autocomplete="username" required maxlength="254"></label>
+            <label>Password<span class="secret"><input name="password" type="password" autocomplete="current-password" required maxlength="128"><button class="btn" type="button" data-toggle aria-label="Show password">Show</button></span></label>
+            <button class="btn primary auth-submit" type="submit" data-label="Sign in" data-waiting="Signing in…">Sign in</button>
+          </form>
+          <div class="auth-links">
+            <button class="btn quiet" type="button" data-go="forgot">Forgot password</button>
+          </div>
+          <p class="auth-foot muted">Don't have an account? <button class="btn quiet" type="button" data-go="signup">Create account</button></p>
+        </div>
       </div>
     </section>
 
-    <section data-screen="signup" class="stack" hidden>
-      <h1>Create account</h1>
-      <form id="signup-form" class="stack">
-        <label>Username<input name="username" required minlength="3" maxlength="30"></label>
-        <label>Email<input name="email" type="email" required maxlength="254"></label>
-        <label>Display name<input name="displayName" required maxlength="50"></label>
-        <label>Password<span class="row"><input name="password" type="password" required minlength="10" maxlength="128"><button class="btn" type="button" data-toggle>Show</button></span></label>
-        <p class="muted">Use 10–128 characters, including a letter and a digit. No spaces.</p>
-        <button class="btn primary" type="submit">Create account</button>
-      </form>
-      <button class="btn" type="button" data-go="login">Back to sign in</button>
+    <section data-screen="signup" class="auth-screen" hidden>
+      <div class="auth-layout">
+        <aside class="auth-brand">
+          <div class="auth-logo" aria-hidden="true"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M9.15 3.9 2.9 12l6.25 8.1 1.62-1.25L5.55 12l5.22-6.85L9.15 3.9Zm5.7 0-1.62 1.25L18.45 12l-5.22 6.85 1.62 1.25L21.1 12 14.85 3.9ZM11 9.15h2v5.7h-2v-5.7Z"/></svg></div>
+          <h2>DevConnect</h2>
+          <p class="muted">Join the developer community and keep the conversation inside the editor.</p>
+        </aside>
+        <div class="auth-card">
+          <div class="auth-logo" aria-hidden="true"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M9.15 3.9 2.9 12l6.25 8.1 1.62-1.25L5.55 12l5.22-6.85L9.15 3.9Zm5.7 0-1.62 1.25L18.45 12l-5.22 6.85 1.62 1.25L21.1 12 14.85 3.9ZM11 9.15h2v5.7h-2v-5.7Z"/></svg></div>
+          <div class="stack">
+            <h1>Create your account</h1>
+            <p class="muted">Join DevConnect to discover and connect with developers.</p>
+          </div>
+          <form id="signup-form" class="stack">
+            <label>Username<input name="username" autocomplete="username" required minlength="3" maxlength="30"></label>
+            <label>Email<input name="email" type="email" autocomplete="email" required maxlength="254"></label>
+            <label>Display name<input name="displayName" autocomplete="name" required maxlength="50"></label>
+            <label>Password<span class="secret"><input name="password" type="password" autocomplete="new-password" required minlength="10" maxlength="128" aria-describedby="signup-password-hint"><button class="btn" type="button" data-toggle aria-label="Show password">Show</button></span></label>
+            <p class="muted" id="signup-password-hint">Use 10–128 characters, including a letter and a digit. No spaces.</p>
+            <button class="btn primary auth-submit" type="submit" data-label="Create account" data-waiting="Creating account…">Create account</button>
+          </form>
+          <p class="auth-foot muted">Already have an account? <button class="btn quiet" type="button" data-go="login">Sign in</button></p>
+        </div>
+      </div>
     </section>
 
-    <section data-screen="forgot" class="stack" hidden>
-      <h1>Forgot password</h1>
-      <p class="muted">Enter the email on your account. The response does not reveal whether that mailbox exists.</p>
-      <form id="forgot-form" class="stack">
-        <label>Email<input name="email" type="email" required maxlength="254"></label>
-        <button class="btn primary" type="submit">Send reset</button>
-      </form>
-      <button class="btn" type="button" data-go="reset">I have a reset token</button>
-      <button class="btn" type="button" data-go="login">Back to sign in</button>
+    <section data-screen="forgot" class="auth-screen" hidden>
+      <div class="auth-layout">
+        <aside class="auth-brand">
+          <div class="auth-logo" aria-hidden="true"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M9.15 3.9 2.9 12l6.25 8.1 1.62-1.25L5.55 12l5.22-6.85L9.15 3.9Zm5.7 0-1.62 1.25L18.45 12l-5.22 6.85 1.62 1.25L21.1 12 14.85 3.9ZM11 9.15h2v5.7h-2v-5.7Z"/></svg></div>
+          <h2>DevConnect</h2>
+          <p class="muted">Reset the password for your DevConnect account.</p>
+        </aside>
+        <div class="auth-card">
+          <div class="auth-logo" aria-hidden="true"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M9.15 3.9 2.9 12l6.25 8.1 1.62-1.25L5.55 12l5.22-6.85L9.15 3.9Zm5.7 0-1.62 1.25L18.45 12l-5.22 6.85 1.62 1.25L21.1 12 14.85 3.9ZM11 9.15h2v5.7h-2v-5.7Z"/></svg></div>
+          <div class="stack">
+            <h1>Reset your password</h1>
+            <p class="muted">Enter the email associated with your account to request a password reset. The response does not reveal whether that mailbox exists.</p>
+          </div>
+          <form id="forgot-form" class="stack">
+            <label>Email<input name="email" type="email" autocomplete="email" required maxlength="254"></label>
+            <button class="btn primary auth-submit" type="submit" data-label="Send reset link" data-waiting="Sending…">Send reset link</button>
+          </form>
+          <div class="auth-links">
+            <button class="btn quiet" type="button" data-go="reset">I have a reset token</button>
+            <button class="btn quiet" type="button" data-go="login">Back to sign in</button>
+          </div>
+        </div>
+      </div>
     </section>
 
-    <section data-screen="reset" class="stack" hidden>
-      <h1>Reset password</h1>
-      <form id="reset-form" class="stack">
-        <label>Reset token<input name="token" required maxlength="512"></label>
-        <label>New password<span class="row"><input name="newPassword" type="password" required minlength="10" maxlength="128"><button class="btn" type="button" data-toggle>Show</button></span></label>
-        <button class="btn primary" type="submit">Update password</button>
-      </form>
-      <button class="btn" type="button" data-go="login">Back to sign in</button>
+    <section data-screen="reset" class="auth-screen" hidden>
+      <div class="auth-layout">
+        <aside class="auth-brand">
+          <div class="auth-logo" aria-hidden="true"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M9.15 3.9 2.9 12l6.25 8.1 1.62-1.25L5.55 12l5.22-6.85L9.15 3.9Zm5.7 0-1.62 1.25L18.45 12l-5.22 6.85 1.62 1.25L21.1 12 14.85 3.9ZM11 9.15h2v5.7h-2v-5.7Z"/></svg></div>
+          <h2>DevConnect</h2>
+          <p class="muted">Choose a new password for your DevConnect account.</p>
+        </aside>
+        <div class="auth-card">
+          <div class="auth-logo" aria-hidden="true"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M9.15 3.9 2.9 12l6.25 8.1 1.62-1.25L5.55 12l5.22-6.85L9.15 3.9Zm5.7 0-1.62 1.25L18.45 12l-5.22 6.85 1.62 1.25L21.1 12 14.85 3.9ZM11 9.15h2v5.7h-2v-5.7Z"/></svg></div>
+          <div class="stack">
+            <h1>Choose a new password</h1>
+            <p class="muted">Enter the reset token from your email and a new password.</p>
+          </div>
+          <form id="reset-form" class="stack">
+            <label>Reset token<input name="token" autocomplete="one-time-code" required maxlength="512"></label>
+            <label>New password<span class="secret"><input name="newPassword" type="password" autocomplete="new-password" required minlength="10" maxlength="128" aria-describedby="reset-password-hint"><button class="btn" type="button" data-toggle aria-label="Show password">Show</button></span></label>
+            <p class="muted" id="reset-password-hint">Use 10–128 characters, including a letter and a digit. No spaces.</p>
+            <button class="btn primary auth-submit" type="submit" data-label="Update password" data-waiting="Updating…">Update password</button>
+          </form>
+          <p class="auth-foot muted"><button class="btn quiet" type="button" data-go="login">Back to sign in</button></p>
+        </div>
+      </div>
     </section>
 
     <section data-screen="home" class="stack" hidden>
@@ -596,7 +674,7 @@ export function renderWebview(webview: Webview, state: HostState): string {
         <button class="btn quiet" type="button" data-settings="menu">Settings</button>
         <h1>About</h1>
         <p>DevConnect</p>
-        <p class="muted" id="about-version">Version 0.4.49</p>
+        <p class="muted" id="about-version">Version 0.4.50</p>
         <p class="muted">A developer network inside Visual Studio Code. Messages stay encrypted on your devices.</p>
       </div>
     </section>
@@ -771,6 +849,7 @@ export function renderWebview(webview: Webview, state: HostState): string {
       ? "splash"
       : (!state.authenticated && protectedScreens.indexOf(state.screen) >= 0 ? "login" : state.screen);
     document.querySelectorAll("[data-screen]").forEach((el) => { el.hidden = el.getAttribute("data-screen") !== visible; });
+    document.body.classList.toggle("auth-view", ["login", "signup", "forgot", "reset"].indexOf(visible) >= 0);
     document.getElementById("app-nav").hidden = !(state.authenticated && state.phase === "ready");
     const inThread = visible === "messages" && !!state.activeConversationId;
     document.getElementById("back-btn").hidden = state.phase === "checking" || inThread || !state.canGoBack;
@@ -1151,6 +1230,15 @@ export function renderWebview(webview: Webview, state: HostState): string {
       if (el.id === "back-btn" || el.id === "thread-back" || el.id === "thread-profile" || el.id === "send-btn" || el.id === "chat-filter" || el.id === "jump-latest" || el.id === "retry" || el.id === "dialog-ok" || el.id === "dialog-cancel" || el.id === "edit-profile" || el.id === "close-edit" || el.hasAttribute("data-go") || el.hasAttribute("data-toggle") || el.hasAttribute("data-settings") || el.hasAttribute("data-friend-tab") || el.classList.contains("toggle") || el.closest("#lightbox")) return;
       el.disabled = !!state.busy;
     });
+    document.querySelectorAll(".auth-submit").forEach((btn) => {
+      const label = btn.getAttribute("data-label") || "";
+      const waiting = btn.getAttribute("data-waiting") || "Please wait…";
+      const screen = btn.closest("[data-screen]");
+      const active = !!(state.busy && screen && !screen.hidden);
+      btn.textContent = active ? waiting : label;
+      if (active) btn.setAttribute("aria-busy", "true");
+      else btn.removeAttribute("aria-busy");
+    });
     publishViewing();
   }
   function ask(text, okLabel, action) {
@@ -1189,7 +1277,9 @@ export function renderWebview(webview: Webview, state: HostState): string {
       const input = target.parentElement && target.parentElement.querySelector("input");
       if (input instanceof HTMLInputElement) {
         input.type = input.type === "password" ? "text" : "password";
-        target.textContent = input.type === "password" ? "Show" : "Hide";
+        const hidden = input.type === "password";
+        target.textContent = hidden ? "Show" : "Hide";
+        target.setAttribute("aria-label", hidden ? "Show password" : "Hide password");
       }
       return;
     }

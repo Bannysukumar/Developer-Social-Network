@@ -37,6 +37,16 @@ describe("Webview security shell", () => {
     new Function(script ?? "");
     expect(html).toContain("justify-content: flex-start");
     expect(html).not.toMatch(/#message-list\s*\{[^}]*justify-content:\s*(center|flex-end)/);
+    expect(html).toContain("Welcome back");
+    expect(html).toContain("Create your account");
+    expect(html).toContain("Reset your password");
+    expect(html).toContain("Choose a new password");
+    expect(html).toContain("auth-card");
+    expect(html).toContain('id="login-form"');
+    expect(html).toContain('id="signup-form"');
+    expect(html).toContain('id="forgot-form"');
+    expect(html).toContain('id="reset-form"');
+    expect(html).toContain("The response does not reveal whether that mailbox exists.");
     expect(html).toContain("Start the conversation by saying hello.");
     expect(html).toContain("image-bubble");
     expect(html).toContain("file-card");
