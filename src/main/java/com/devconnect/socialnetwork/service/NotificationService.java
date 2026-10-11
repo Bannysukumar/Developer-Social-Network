@@ -98,6 +98,22 @@ public class NotificationService {
         return new CountResponse(result.getModifiedCount());
     }
 
+    /**
+     * Marks every unread message notification for one conversation.
+     * Friend requests and other conversations are left untouched.
+     */
+    public int markMessageNotificationsRead(String userId, String conversationId) {
+        var result = mongoTemplate.updateMulti(
+                Query.query(Criteria.where("recipientId").is(userId)
+                        .and("type").is(NotificationType.NEW_MESSAGE)
+                        .and("referenceId").is(conversationId)
+                        .and("read").is(false)),
+                new Update().set("read", true),
+                NotificationEntity.class
+        );
+        return (int) result.getModifiedCount();
+    }
+
     public void deleteForRecipient(String userId) {
         repository.deleteByRecipientId(userId);
     }

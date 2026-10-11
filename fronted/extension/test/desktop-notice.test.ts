@@ -173,7 +173,7 @@ describe("desktop notices", () => {
     expect(isActivelyReading(switching, "c2")).toBe(false);
     const hidden = reading({ viewVisible: false, webviewDocumentVisible: false });
     expect(noticeFor("c1", "m-e", hidden, seen)).not.toBeNull();
-    const background = reading({ windowFocused: false, windowActive: false, webviewFocused: true });
+    const background = reading({ windowFocused: false, windowActive: false, webviewFocused: false, webviewDocumentVisible: true });
     expect(noticeFor("c1", "m-f", background, seen)).not.toBeNull();
     expect(resolveMessageNotice({
       messageId: "m-f2",
@@ -184,6 +184,41 @@ describe("desktop notices", () => {
       prefs,
       seen,
     }).channel).toBe("desktop");
+    const focusedChat = reading({ windowFocused: false, windowActive: false, webviewFocused: true, webviewDocumentVisible: false });
+    const first = resolveMessageNotice({
+      messageId: "m-focus",
+      conversationId: "c1",
+      senderIsSelf: false,
+      senderBlocked: false,
+      reading: focusedChat,
+      prefs,
+      seen,
+      notificationId: "note-focus",
+    });
+    expect(first.channel).toBe("none");
+    expect(first.reason).toBe("viewing");
+    for (const id of first.rememberIds) seen.add(id);
+    const replay = resolveMessageNotice({
+      messageId: "m-focus",
+      conversationId: "c1",
+      senderIsSelf: false,
+      senderBlocked: false,
+      reading: focusedChat,
+      prefs,
+      seen,
+      notificationId: "note-focus",
+    });
+    expect(replay.channel).toBe("none");
+    expect(replay.reason).toBe("duplicate");
+    expect(resolveMessageNotice({
+      messageId: "m-other",
+      conversationId: "c2",
+      senderIsSelf: false,
+      senderBlocked: false,
+      reading: focusedChat,
+      prefs,
+      seen,
+    }).channel).toBe("editor");
     const webviewInsideForeground = reading({ windowFocused: false, windowActive: true, webviewFocused: true });
     expect(noticeFor("c1", "m-g", webviewInsideForeground, seen)).toBeNull();
     const otherWhileAway = reading({ windowFocused: false, windowActive: false, activeConversationId: "c1", reportedConversationId: "c1" });

@@ -3,7 +3,7 @@
   "displayName": "DevConnect",
   "description": "A developer community inside Visual Studio Code.",
   "publisher": "Bannysukumar2255",
-  "version": "0.4.31",
+  "version": "0.4.33",
   "private": true,
   "engines": {
     "vscode": "^1.85.0"
@@ -99,6 +99,11 @@
           "type": "boolean",
           "default": true,
           "description": "Show a VS Code notification when someone accepts your friend request."
+        },
+        "devconnect.debugNoticeRouting": {
+          "type": "boolean",
+          "default": false,
+          "description": "Write notice routing decisions to the DevConnect output channel. Message text, keys, and tokens are not logged."
         },
         "devconnect.requestTimeoutMs": {
           "type": "number",

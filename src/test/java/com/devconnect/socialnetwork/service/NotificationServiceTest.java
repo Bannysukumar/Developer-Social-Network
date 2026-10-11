@@ -110,6 +110,23 @@ class NotificationServiceTest {
         verify(mongoTemplate).updateMulti(any(Query.class), any(Update.class), eq(NotificationEntity.class));
     }
 
+    @Test
+    void markMessageNotificationsReadUpdatesOnlyThatConversation() {
+        when(mongoTemplate.updateMulti(any(Query.class), any(Update.class), eq(NotificationEntity.class)))
+                .thenReturn(UpdateResult.acknowledged(1, 1L, new BsonObjectId()));
+
+        int updated = service.markMessageNotificationsRead("user-a", "conversation-1");
+
+        assertThat(updated).isEqualTo(1);
+        ArgumentCaptor<Query> query = ArgumentCaptor.forClass(Query.class);
+        verify(mongoTemplate).updateMulti(query.capture(), any(Update.class), eq(NotificationEntity.class));
+        String rendered = query.getValue().getQueryObject().toJson();
+        assertThat(rendered).contains("user-a");
+        assertThat(rendered).contains("conversation-1");
+        assertThat(rendered).contains("NEW_MESSAGE");
+        assertThat(rendered).doesNotContain("FRIEND_REQUEST");
+    }
+
     private static final String NOTE_ID = "507f1f77bcf86cd799439011";
 
     private static NotificationEntity unread(String id, String recipientId) {

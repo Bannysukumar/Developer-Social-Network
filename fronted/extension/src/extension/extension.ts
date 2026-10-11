@@ -5,7 +5,7 @@ import { createApiConfig } from "../api/config";
 import type { ScreenId } from "../shared/flow";
 import { AuthService } from "./auth-service";
 import { chatSocketUrl, messageFromFrame, NodeChatSocket, notificationFromFrame } from "./chat-socket";
-import { decideNotificationNotice, decideStoredNotice, isActivelyReading, noticeChannel, noticeLaunchUri, resolveMessageNotice, unreadMessageNotificationId, windowInForeground, type NoticeChannel, type NoticePrefs, type NoticeTarget, type ReadingContext } from "./desktop-notice";
+import { decideNotificationNotice, decideStoredNotice, isActivelyReading, noticeChannel, noticeLaunchUri, readingIsForeground, resolveMessageNotice, unreadMessageNotificationId, type NoticeChannel, type NoticePrefs, type NoticeTarget, type ReadingContext } from "./desktop-notice";
 import { shouldUseEditorFallback, showBackgroundNotice, windowsToastScriptPath } from "./os-notice";
 import { SessionFlow } from "./session-flow";
 import { createStateMessage, renderWebview } from "./webview";
@@ -19,6 +19,7 @@ class DevConnectHost implements vscode.WebviewViewProvider, vscode.Disposable {
   private socketToken: string | undefined;
   private pending: { screen: ScreenId; conversationId?: string; userId?: string; notificationId?: string; friendsPanel?: "requests" } | undefined;
   private readonly openNotices: { conversationId?: string; notificationId?: string }[] = [];
+  private readonly latestMessageNotification = new Map<string, string>();
   private openingNotice = false;
   private reportedConversationId: string | null = null;
   private webviewDocumentVisible = false;
@@ -198,8 +199,14 @@ class DevConnectHost implements vscode.WebviewViewProvider, vscode.Disposable {
     const selfId = this.auth.getUser()?.id;
     if (message?.deletedForEveryone || frame.type === "MESSAGE_DELETED" || frame.type === "MESSAGE_HIDDEN") return;
     if (message && message.senderId !== selfId && this.flow.hidesUser(message.senderId)) return;
-    const noticeSlot = message ? { conversationId: message.conversationId, notificationId: unreadMessageNotificationId(this.flow.snapshot().notifications, message.conversationId) } : undefined;
-    if (noticeSlot) this.openNotices.push(noticeSlot);
+    const linkedNotificationId = message
+      ? unreadMessageNotificationId(this.flow.snapshot().notifications, message.conversationId) ?? this.latestMessageNotification.get(message.conversationId)
+      : undefined;
+    const noticeSlot = message ? { conversationId: message.conversationId, notificationId: linkedNotificationId } : undefined;
+    if (noticeSlot) {
+      this.openNotices.push(noticeSlot);
+      if (this.openNotices.length > 30) this.openNotices.shift();
+    }
     const reading = this.readingContext();
     const decision = message
       ? resolveMessageNotice({
@@ -224,8 +231,7 @@ class DevConnectHost implements vscode.WebviewViewProvider, vscode.Disposable {
       })();
     if (!target) {
       for (const id of decision?.rememberIds ?? []) this.rememberNotice(id);
-      this.output.appendLine(`notice suppressed id=${message?.id ?? "notification"} channel=${decision?.channel ?? "none"} foreground=${this.windowIsForeground()} viewVisible=${this.view?.visible === true}`);
-      this.dropNotice(noticeSlot);
+      this.logNoticeRoute(message?.id ?? "notification", message?.conversationId ?? notificationFromFrame(frame)?.referenceId ?? "", decision?.channel ?? "none", decision?.reason ?? "disabled");
       return;
     }
     for (const id of decision?.rememberIds ?? []) {
@@ -237,8 +243,19 @@ class DevConnectHost implements vscode.WebviewViewProvider, vscode.Disposable {
     const channel = decision?.channel === "editor" || decision?.channel === "desktop"
       ? decision.channel
       : noticeChannel(this.windowIsForeground());
+    this.logNoticeRoute(message?.id ?? target.id, message?.conversationId ?? target.conversationId ?? "", channel, decision?.reason ?? channel);
     await this.presentNotice(target, channel);
     this.dropNotice(noticeSlot);
+  }
+
+  private logNoticeRoute(messageId: string, conversationId: string, channel: string, reason: string): void {
+    if (vscode.workspace.getConfiguration("devconnect").get<boolean>("debugNoticeRouting") !== true) return;
+    const reading = this.readingContext();
+    const active = reading.activeConversationId ?? "";
+    const reported = reading.reportedConversationId ?? "";
+    this.output.appendLine(
+      `notice route messageId=${messageId} conversationId=${conversationId} activeConversationId=${active} reportedConversationId=${reported} viewVisible=${reading.viewVisible} documentVisible=${reading.webviewDocumentVisible} webviewFocused=${reading.webviewFocused} windowFocused=${reading.windowFocused} windowActive=${String(reading.windowActive)} foreground=${readingIsForeground(reading)} channel=${channel} reason=${reason}`,
+    );
   }
 
   private readingContext(): ReadingContext {
@@ -255,19 +272,10 @@ class DevConnectHost implements vscode.WebviewViewProvider, vscode.Disposable {
     };
   }
 
-  /** Foreground comes from VS Code window state, not from webview DOM focus. */
+  /** Foreground comes from VS Code window state. A focused chat webview keeps the window in the foreground. */
   noteWindowState(state: { focused: boolean; active?: boolean }): void {
-    const wasForeground = windowInForeground(this.windowFocused, this.windowActive);
     this.windowFocused = state.focused;
     this.windowActive = state.active;
-    const foreground = windowInForeground(state.focused, state.active);
-    if (!foreground) {
-      this.webviewDocumentVisible = false;
-      return;
-    }
-    if (!wasForeground && this.view?.visible === true && this.reportedConversationId) {
-      this.webviewDocumentVisible = true;
-    }
   }
 
   private clearViewing(): void {
@@ -286,7 +294,7 @@ class DevConnectHost implements vscode.WebviewViewProvider, vscode.Disposable {
   }
 
   private windowIsForeground(): boolean {
-    return windowInForeground(this.windowFocused, this.windowActive);
+    return readingIsForeground(this.readingContext());
   }
 
   private async presentNotice(target: NoticeTarget, channel: Exclude<NoticeChannel, "none">): Promise<void> {
@@ -328,12 +336,13 @@ class DevConnectHost implements vscode.WebviewViewProvider, vscode.Disposable {
 
   private attachMessageNotification(frame: Parameters<typeof notificationFromFrame>[0]): void {
     const note = notificationFromFrame(frame);
-    if (!note || note.read || note.type !== "NEW_MESSAGE" || !note.referenceId) return;
-    for (const slot of this.openNotices) {
-      if (slot.conversationId === note.referenceId && !slot.notificationId) {
-        slot.notificationId = note.id;
-        this.rememberNotice(note.id);
-      }
+    if (!note || note.type !== "NEW_MESSAGE" || !note.referenceId) return;
+    this.latestMessageNotification.set(note.referenceId, note.id);
+    const linked = this.openNotices.some((slot) => slot.conversationId === note.referenceId);
+    if (!linked) return;
+    this.rememberNotice(note.id);
+    for (const slot of [...this.openNotices]) {
+      if (slot.conversationId === note.referenceId) this.dropNotice(slot);
     }
   }
 
@@ -342,9 +351,27 @@ class DevConnectHost implements vscode.WebviewViewProvider, vscode.Disposable {
       const list = await this.auth.loadNotifications();
       const prefs = readNoticePrefs();
       for (const note of list.items) {
+        if (note.type === "NEW_MESSAGE" && note.referenceId) {
+          const decision = resolveMessageNotice({
+            messageId: note.id,
+            conversationId: note.referenceId,
+            senderIsSelf: false,
+            senderBlocked: false,
+            reading: this.readingContext(),
+            prefs,
+            seen: this.seenNotices,
+            notificationId: note.id,
+          });
+          this.logNoticeRoute(note.id, note.referenceId, decision.channel, decision.reason);
+          if (!decision.target || decision.channel === "none") {
+            for (const id of decision.rememberIds) this.rememberNotice(id);
+            continue;
+          }
+          await this.presentNotice(decision.target, decision.channel);
+          continue;
+        }
         const reading = note.referenceId ? isActivelyReading(this.readingContext(), note.referenceId) : false;
         const target = decideStoredNotice(note, prefs, this.seenNotices, reading);
-        if (!target && reading && note.type === "NEW_MESSAGE") this.rememberNotice(note.id);
         if (target) await this.presentNotice(target, noticeChannel(this.windowIsForeground()));
       }
     } catch {

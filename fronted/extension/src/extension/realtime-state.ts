@@ -118,6 +118,29 @@ export function applyNotificationRead<T extends { id: string; read: boolean }>(
   return { notifications: next, unreadCount: unread };
 }
 
+/** Unread message alerts for one conversation. The notification id is not the message id. */
+export function unreadMessageNotificationsForConversation<T extends { id: string; type: string; referenceId?: string | null; read: boolean }>(
+  notifications: readonly T[],
+  conversationId: string,
+): T[] {
+  return notifications.filter((note) => note.type === "NEW_MESSAGE" && !note.read && note.referenceId === conversationId);
+}
+
+/** A server refresh must not turn a confirmed read back into unread. Other conversations stay as the server sent them. */
+export function absorbServerNotifications<T extends { id: string; read: boolean }>(
+  incoming: readonly T[],
+  unreadCount: number,
+  confirmedReadIds: ReadonlySet<string>,
+): { notifications: T[]; unreadCount: number } {
+  let unread = unreadCount;
+  const notifications = incoming.map((note) => {
+    if (!confirmedReadIds.has(note.id) || note.read) return note;
+    unread = Math.max(0, unread - 1);
+    return { ...note, read: true };
+  });
+  return { notifications, unreadCount: unread };
+}
+
 /**
  * Message popups are routed by the extension host so a WebView toast cannot
  * compete with the in-editor notice or the native desktop toast.
@@ -132,14 +155,27 @@ export function mergeNotification(
   incoming: NotificationDto,
   unreadNotifications: number,
   toastSeq: number,
+  confirmedReadIds?: ReadonlySet<string>,
 ): LivePatch {
-  if (notifications.some((item) => item.id === incoming.id)) return { refresh: null };
-  const social = incoming.type === "FRIEND_REQUEST" || incoming.type === "FRIEND_REQUEST_ACCEPTED";
+  if (notifications.some((item) => item.id === incoming.id)) {
+    const existing = notifications.find((item) => item.id === incoming.id);
+    const confirmed = confirmedReadIds?.has(incoming.id) ?? false;
+    if (!existing || existing.read || (!incoming.read && !confirmed)) return { refresh: null };
+    const stored = { ...existing, ...incoming, read: true };
+    return {
+      notifications: notifications.map((item) => (item.id === incoming.id ? stored : item)),
+      unreadNotifications: Math.max(0, unreadNotifications - 1),
+      refresh: null,
+    };
+  }
+  const read = incoming.read || (confirmedReadIds?.has(incoming.id) ?? false);
+  const stored = read && !incoming.read ? { ...incoming, read: true } : incoming;
+  const social = stored.type === "FRIEND_REQUEST" || stored.type === "FRIEND_REQUEST_ACCEPTED";
   return {
-    notifications: [incoming, ...notifications],
-    unreadNotifications: incoming.read ? unreadNotifications : unreadNotifications + 1,
-    toast: incoming.message,
+    notifications: [stored, ...notifications],
+    unreadNotifications: stored.read ? unreadNotifications : unreadNotifications + 1,
+    toast: stored.message,
     toastSeq: toastSeq + 1,
-    refresh: social ? "social" : incoming.type === "NEW_MESSAGE" ? "conversations" : null,
+    refresh: social ? "social" : stored.type === "NEW_MESSAGE" ? "conversations" : null,
   };
 }

@@ -4,9 +4,8 @@ import { notificationDestination, resolveScreen, type ScreenId } from "../shared
 import { webviewMessageSchema } from "../shared/protocol";
 import type { AuthService } from "./auth-service";
 import { messageFromFrame, notificationFromFrame, presenceFromFrame, typingFromFrame, type ServerFrame, type SocketStatus } from "./chat-socket";
-import { unreadMessageNotificationId } from "./desktop-notice";
 import { mergePresence } from "./presence-state";
-import { acceptLiveToast, applyNotificationRead, applyTombstone, mergeHistory, mergeLiveMessage, mergeNotification, mergeReceipt } from "./realtime-state";
+import { absorbServerNotifications, acceptLiveToast, applyNotificationRead, applyTombstone, mergeHistory, mergeLiveMessage, mergeNotification, mergeReceipt, unreadMessageNotificationsForConversation } from "./realtime-state";
 import { isRiskyFile } from "./crypto/file-payload";
 import { emptyHostState, type HostState } from "./webview";
 
@@ -49,6 +48,11 @@ export class SessionFlow {
   private typingTimer: ReturnType<typeof setTimeout> | undefined;
   private readInflight = new Set<string>();
   private readAgain = new Set<string>();
+  private confirmedNotificationReads = new Set<string>();
+  private notificationAckInflight = new Set<string>();
+  private notificationAckQueued = new Set<string>();
+  private notificationAckAgain = new Set<string>();
+  private notificationEpoch = 0;
   private hiddenPresence = new Set<string>();
   private imagePreviews = new Map<string, string>();
   private imageErrors = new Set<string>();
@@ -242,6 +246,7 @@ export class SessionFlow {
         && !message.deletedForEveryone
       ) {
         this.scheduleConversationRead(message.conversationId);
+        this.scheduleNotificationRead(message.conversationId);
       }
       this.pushState();
       return;
@@ -254,7 +259,7 @@ export class SessionFlow {
     }
     const note = notificationFromFrame(frame);
     if (!note) return;
-    const patch = mergeNotification(this.notifications, note, this.unreadNotifications, this.toastSeq);
+    const patch = mergeNotification(this.notifications, note, this.unreadNotifications, this.toastSeq, this.confirmedNotificationReads);
     if (patch.notifications) this.notifications = patch.notifications;
     if (patch.unreadNotifications !== undefined) this.unreadNotifications = patch.unreadNotifications;
     if (patch.toast && acceptLiveToast(note)) {
@@ -263,6 +268,9 @@ export class SessionFlow {
     }
     if (patch.refresh === "social") void this.refreshSocialQuiet();
     if (patch.refresh === "conversations") void this.refreshConversationsQuiet();
+    if (note.type === "NEW_MESSAGE" && note.referenceId && this.viewingConversation(note.referenceId)) {
+      this.scheduleNotificationRead(note.referenceId);
+    }
     this.pushState();
   }
 
@@ -320,6 +328,11 @@ export class SessionFlow {
     if (this.typingTimer) clearTimeout(this.typingTimer);
     this.typingTimer = undefined;
     this.seenMessageIds.clear();
+    this.confirmedNotificationReads.clear();
+    this.notificationAckInflight.clear();
+    this.notificationAckQueued.clear();
+    this.notificationAckAgain.clear();
+    this.notificationEpoch += 1;
     this.toast = null;
     this.devices = [];
     this.blockedUsers = [];
@@ -382,6 +395,7 @@ export class SessionFlow {
         this.scheduleConversationRead(opened.conversation.id);
         await this.syncMessageLock(opened.conversation.participantIds);
         this.show("messages", false);
+        this.scheduleNotificationRead(opened.conversation.id);
         return;
       } catch (error) {
         if (isAuthenticationFailure(error) || !this.auth.isAuthenticated()) throw error;
@@ -409,8 +423,7 @@ export class SessionFlow {
       ...social.outgoing.map((item) => item.counterpart),
     ]);
     this.conversations = conversations;
-    this.notifications = notes.items;
-    this.unreadNotifications = notes.unreadCount;
+    this.applyServerNotifications(notes.items, notes.unreadCount);
     try {
       this.blockedUsers = await this.auth.blockedUsers();
     } catch {
@@ -474,28 +487,84 @@ export class SessionFlow {
   }
 
   private async acknowledge(notificationId: string): Promise<void> {
-    const updated = await this.auth.markNotificationRead(notificationId);
-    const applied = applyNotificationRead(this.notifications, this.unreadNotifications, updated);
-    this.notifications = applied.notifications;
-    this.unreadNotifications = applied.unreadCount;
+    if (this.confirmedNotificationReads.has(notificationId) || this.notificationAckInflight.has(notificationId)) return;
+    this.notificationAckInflight.add(notificationId);
     try {
-      const notes = await this.auth.loadNotifications();
-      this.notifications = notes.items;
-      this.unreadNotifications = notes.unreadCount;
-    } catch {
-      // The confirmed read response remains in the local list.
+      const updated = await this.auth.markNotificationRead(notificationId);
+      this.confirmedNotificationReads.add(updated.id);
+      this.notificationEpoch += 1;
+      const applied = applyNotificationRead(this.notifications, this.unreadNotifications, updated);
+      this.notifications = applied.notifications;
+      this.unreadNotifications = applied.unreadCount;
+      try {
+        await this.fetchNotifications();
+      } catch {
+        // The confirmed read response remains in the local list.
+      }
+    } finally {
+      this.notificationAckInflight.delete(notificationId);
     }
   }
 
-  private async acknowledgeConversation(conversationId: string): Promise<void> {
-    let notificationId = unreadMessageNotificationId(this.notifications, conversationId);
-    if (!notificationId) {
+  private viewingConversation(conversationId: string): boolean {
+    return this.screen === "messages" && this.activeConversationId === conversationId;
+  }
+
+  private applyServerNotifications(items: HostState["notifications"], unreadCount: number): void {
+    const absorbed = absorbServerNotifications(items, unreadCount, this.confirmedNotificationReads);
+    this.notifications = absorbed.notifications;
+    this.unreadNotifications = absorbed.unreadCount;
+  }
+
+  /** Applies a list only when no read confirmation landed after this request started. */
+  private async fetchNotifications(): Promise<boolean> {
+    const epoch = this.notificationEpoch;
+    const notes = await this.auth.loadNotifications();
+    if (epoch !== this.notificationEpoch) return false;
+    this.applyServerNotifications(notes.items, notes.unreadCount);
+    return true;
+  }
+
+  /** Marks every unread message notification for this conversation. Other types and conversations stay unread. */
+  private async acknowledgeConversation(conversationId: string, onlyWhileViewing = false): Promise<void> {
+    const allowed = () => !onlyWhileViewing || this.viewingConversation(conversationId);
+    if (!allowed()) return;
+    let pending = unreadMessageNotificationsForConversation(this.notifications, conversationId);
+    if (pending.length === 0) {
+      const epoch = this.notificationEpoch;
       const notes = await this.auth.loadNotifications();
-      this.notifications = notes.items;
-      this.unreadNotifications = notes.unreadCount;
-      notificationId = unreadMessageNotificationId(this.notifications, conversationId);
+      if (!allowed() || epoch !== this.notificationEpoch) return;
+      for (const item of notes.items) {
+        if (this.notifications.some((note) => note.id === item.id)) continue;
+        const patch = mergeNotification(this.notifications, item, this.unreadNotifications, this.toastSeq, this.confirmedNotificationReads);
+        if (patch.notifications) this.notifications = patch.notifications;
+        if (patch.unreadNotifications !== undefined) this.unreadNotifications = patch.unreadNotifications;
+      }
+      pending = unreadMessageNotificationsForConversation(this.notifications, conversationId);
     }
-    if (notificationId) await this.acknowledge(notificationId);
+    for (const note of pending) {
+      if (!allowed()) return;
+      try {
+        await this.acknowledge(note.id);
+      } catch {
+        // Leave this notification unread. A later view of the conversation can retry.
+      }
+    }
+  }
+
+  private scheduleNotificationRead(conversationId: string): void {
+    if (!this.viewingConversation(conversationId)) return;
+    if (this.notificationAckQueued.has(conversationId)) {
+      this.notificationAckAgain.add(conversationId);
+      return;
+    }
+    this.notificationAckQueued.add(conversationId);
+    void this.acknowledgeConversation(conversationId, true).catch(() => undefined).finally(() => {
+      this.notificationAckQueued.delete(conversationId);
+      this.pushState();
+      if (!this.notificationAckAgain.delete(conversationId)) return;
+      this.scheduleNotificationRead(conversationId);
+    });
   }
 
   private async acknowledgeTarget(notificationId?: string, conversationId?: string): Promise<void> {
@@ -531,6 +600,7 @@ export class SessionFlow {
       this.conversations = await this.auth.listConversations();
       await this.syncMessageLock(opened.conversation.participantIds);
       this.show("messages", false);
+      this.scheduleNotificationRead(opened.conversation.id);
     } else if (target.userId) {
       this.selectedUser = await this.auth.getUserById(target.userId);
       this.show("user", false);
@@ -730,6 +800,7 @@ export class SessionFlow {
           this.conversations = await this.auth.listConversations();
           await this.syncMessageLock(opened.conversation.participantIds);
           this.show("messages", this.screen !== "messages");
+          this.scheduleNotificationRead(opened.conversation.id);
           break;
         }
         case "deleteMessage": {
@@ -891,17 +962,15 @@ export class SessionFlow {
           break;
         }
         case "loadNotifications": {
-          const notes = await this.auth.loadNotifications();
-          this.notifications = notes.items;
-          this.unreadNotifications = notes.unreadCount;
+          await this.fetchNotifications();
           break;
         }
         case "openNotification": {
           let note = this.notifications.find((item) => item.id === message.notificationId);
           if (!note) {
+            const epoch = this.notificationEpoch;
             const notes = await this.auth.loadNotifications();
-            this.notifications = notes.items;
-            this.unreadNotifications = notes.unreadCount;
+            if (epoch === this.notificationEpoch) this.applyServerNotifications(notes.items, notes.unreadCount);
             note = this.notifications.find((item) => item.id === message.notificationId);
           }
           if (!note) break;
@@ -925,6 +994,7 @@ export class SessionFlow {
             this.unreadMessages = Object.values(this.unreadByConversation).reduce((sum, count) => sum + count, 0);
             await this.syncMessageLock(opened.conversation.participantIds);
             this.show("messages", true);
+            this.scheduleNotificationRead(opened.conversation.id);
           } else if (note?.type === "FRIEND_REQUEST_ACCEPTED" && note.actorId) {
             this.selectedUser = await this.auth.getUserById(note.actorId);
             this.show("user", true);
@@ -947,17 +1017,17 @@ export class SessionFlow {
           break;
         }
         case "markNotificationRead": {
-          await this.auth.markNotificationRead(message.notificationId);
-          const notes = await this.auth.loadNotifications();
-          this.notifications = notes.items;
-          this.unreadNotifications = notes.unreadCount;
+          await this.acknowledge(message.notificationId);
           break;
         }
         case "markAllNotificationsRead": {
           await this.auth.markAllNotificationsRead();
+          this.notificationEpoch += 1;
           const notes = await this.auth.loadNotifications();
-          this.notifications = notes.items;
-          this.unreadNotifications = notes.unreadCount;
+          for (const item of notes.items) {
+            if (item.read) this.confirmedNotificationReads.add(item.id);
+          }
+          this.applyServerNotifications(notes.items, notes.unreadCount);
           this.notice = "Notifications marked read.";
           break;
         }
@@ -1232,9 +1302,7 @@ export class SessionFlow {
 
   private async refreshNotesQuiet(): Promise<void> {
     try {
-      const notes = await this.auth.loadNotifications();
-      this.notifications = notes.items;
-      this.unreadNotifications = notes.unreadCount;
+      await this.fetchNotifications();
       this.pushState();
     } catch (error) {
       if (isAuthenticationFailure(error) || !this.auth.isAuthenticated()) {

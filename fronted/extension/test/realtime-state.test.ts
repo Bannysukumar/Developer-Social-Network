@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { notificationFromFrame, parseServerFrame } from "../src/extension/chat-socket";
-import { applyNotificationRead, applyTombstone, mergeHistory, mergeLiveMessage, mergeNotification, mergeReceipt, retryDelayMs } from "../src/extension/realtime-state";
+import { absorbServerNotifications, applyNotificationRead, applyTombstone, mergeHistory, mergeLiveMessage, mergeNotification, mergeReceipt, retryDelayMs, unreadMessageNotificationsForConversation } from "../src/extension/realtime-state";
 
 const message = {
   id: "m1",
@@ -105,6 +105,35 @@ describe("realtime state", () => {
     expect(merged[0]?.displayText).toBe("This message was deleted");
     const receipt = mergeHistory([{ ...message, status: "READ" }], [{ ...message, status: "SENT" }]);
     expect(receipt[0]?.status).toBe("READ");
+  });
+
+  test("maps a conversation to its message notification id, which is not the message id", () => {
+    const notes = [
+      { id: "note-a", type: "NEW_MESSAGE", referenceId: "c1", read: false },
+      { id: "m1", type: "NEW_MESSAGE", referenceId: "c2", read: false },
+      { id: "note-friend", type: "FRIEND_REQUEST", referenceId: "c1", read: false },
+      { id: "note-read", type: "NEW_MESSAGE", referenceId: "c1", read: true },
+    ];
+    expect(unreadMessageNotificationsForConversation(notes, "c1").map((note) => note.id)).toEqual(["note-a"]);
+    expect(unreadMessageNotificationsForConversation(notes, "c2").map((note) => note.id)).toEqual(["m1"]);
+  });
+
+  test("a confirmed read survives a stale unread refresh and a replayed frame", () => {
+    const incoming = { id: "note-a", type: "NEW_MESSAGE" as const, referenceId: "c1", message: "You received a new encrypted message", read: false };
+    const other = { id: "note-b", type: "NEW_MESSAGE" as const, referenceId: "c2", message: "You received a new encrypted message", read: false };
+    const confirmed = new Set(["note-a"]);
+    const replay = mergeNotification([], incoming, 0, 0, confirmed);
+    expect(replay.notifications?.[0]?.read).toBe(true);
+    expect(replay.unreadNotifications).toBe(0);
+    const stored = replay.notifications ?? [];
+    expect(mergeNotification(stored, incoming, 0, 1, confirmed).unreadNotifications).toBeUndefined();
+    const kept = mergeNotification([{ ...incoming, read: true }, other], incoming, 1, 2);
+    expect(kept.notifications).toBeUndefined();
+    expect(kept.refresh).toBeNull();
+    const stale = absorbServerNotifications([incoming, other], 2, confirmed);
+    expect(stale.notifications.map((note) => note.read)).toEqual([true, false]);
+    expect(stale.unreadCount).toBe(1);
+    expect(absorbServerNotifications(stale.notifications, stale.unreadCount, confirmed).unreadCount).toBe(1);
   });
 
   test("accepts a hide-message frame", () => {

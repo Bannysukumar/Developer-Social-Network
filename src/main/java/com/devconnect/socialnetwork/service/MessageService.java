@@ -226,6 +226,7 @@ public class MessageService {
                 .limit(50);
         List<MessageEntity> messages = mongoTemplate.find(query, MessageEntity.class);
         if (messages.isEmpty()) {
+            notificationService.markMessageNotificationsRead(userId, conversationId);
             return 0;
         }
         var now = clock.instant();
@@ -256,6 +257,7 @@ public class MessageService {
                 millis(started, persisted),
                 millis(persisted, System.nanoTime())
         );
+        notificationService.markMessageNotificationsRead(userId, conversationId);
         return messages.size();
     }
 
