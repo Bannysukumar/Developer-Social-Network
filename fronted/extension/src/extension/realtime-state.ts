@@ -118,6 +118,15 @@ export function applyNotificationRead<T extends { id: string; read: boolean }>(
   return { notifications: next, unreadCount: unread };
 }
 
+/** In-app toast for a message the open thread is already showing is redundant. Other notices stay. */
+export function acceptLiveToast(
+  note: { type: string; referenceId?: string | null },
+  screen: string,
+  activeConversationId: string | null,
+): boolean {
+  return !(note.type === "NEW_MESSAGE" && screen === "messages" && !!note.referenceId && note.referenceId === activeConversationId);
+}
+
 export function mergeNotification(
   notifications: readonly NotificationDto[],
   incoming: NotificationDto,

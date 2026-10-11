@@ -6,7 +6,7 @@ import type { AuthService } from "./auth-service";
 import { messageFromFrame, notificationFromFrame, presenceFromFrame, typingFromFrame, type ServerFrame, type SocketStatus } from "./chat-socket";
 import { unreadMessageNotificationId } from "./desktop-notice";
 import { mergePresence } from "./presence-state";
-import { applyNotificationRead, applyTombstone, mergeHistory, mergeLiveMessage, mergeNotification, mergeReceipt } from "./realtime-state";
+import { acceptLiveToast, applyNotificationRead, applyTombstone, mergeHistory, mergeLiveMessage, mergeNotification, mergeReceipt } from "./realtime-state";
 import { isRiskyFile } from "./crypto/file-payload";
 import { emptyHostState, type HostState } from "./webview";
 
@@ -257,7 +257,7 @@ export class SessionFlow {
     const patch = mergeNotification(this.notifications, note, this.unreadNotifications, this.toastSeq);
     if (patch.notifications) this.notifications = patch.notifications;
     if (patch.unreadNotifications !== undefined) this.unreadNotifications = patch.unreadNotifications;
-    if (patch.toast) {
+    if (patch.toast && acceptLiveToast(note, this.screen, this.activeConversationId)) {
       this.toast = patch.toast;
       this.toastSeq = patch.toastSeq ?? this.toastSeq;
     }

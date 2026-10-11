@@ -1,7 +1,45 @@
 import { describe, expect, test } from "bun:test";
-import { decideMessageNotice, decideNotificationNotice, decideStoredNotice, isActivelyReading, noticeChannel, noticeLaunchUri, unreadMessageNotificationId } from "../src/extension/desktop-notice";
+import { decideMessageNotice, decideNotificationNotice, decideStoredNotice, isActivelyReading, noticeChannel, noticeLaunchUri, resolveMessageNotice, unreadMessageNotificationId, type ReadingContext } from "../src/extension/desktop-notice";
+import { acceptLiveToast, mergeLiveMessage, mergeReceipt } from "../src/extension/realtime-state";
 
 const prefs = { messages: true, friendRequests: true, friendAccepted: true };
+
+function reading(overrides: Partial<ReadingContext> = {}): ReadingContext {
+  return {
+    windowFocused: true,
+    windowActive: true,
+    viewVisible: true,
+    screen: "messages",
+    activeConversationId: "c1",
+    reportedConversationId: "c1",
+    webviewDocumentVisible: true,
+    webviewFocused: false,
+    ...overrides,
+  };
+}
+
+function noticeFor(
+  conversationId: string,
+  messageId: string,
+  context: ReadingContext,
+  seen: Set<string>,
+  options: { senderIsSelf?: boolean; senderBlocked?: boolean; senderLabel?: string; notificationId?: string } = {},
+) {
+  const decision = resolveMessageNotice({
+    messageId,
+    conversationId,
+    senderIsSelf: options.senderIsSelf ?? false,
+    senderBlocked: options.senderBlocked ?? false,
+    reading: context,
+    prefs,
+    seen,
+    senderLabel: options.senderLabel,
+    notificationId: options.notificationId,
+  });
+  for (const id of decision.rememberIds) seen.add(id);
+  if (decision.target) seen.add(decision.target.id);
+  return decision.target;
+}
 
 describe("desktop notices", () => {
   test("skips a message the user is already reading and a duplicate id", () => {
@@ -75,11 +113,11 @@ describe("desktop notices", () => {
   });
 
   test("notifies when VS Code is unfocused, minimized, or the sidebar is closed", () => {
-    expect(isActivelyReading(true, true, "c1", "c1")).toBe(true);
-    expect(isActivelyReading(false, true, "c1", "c1")).toBe(false);
-    expect(isActivelyReading(false, true, "c1", "c1")).toBe(false);
-    expect(isActivelyReading(true, false, "c1", "c1")).toBe(false);
-    expect(isActivelyReading(true, true, "c1", "c2")).toBe(false);
+    const open = reading({ reportedConversationId: "c1" });
+    expect(isActivelyReading(open, "c1")).toBe(true);
+    expect(isActivelyReading(reading({ windowFocused: false, windowActive: false, webviewFocused: false, reportedConversationId: "c1" }), "c1")).toBe(false);
+    expect(isActivelyReading(reading({ viewVisible: false, reportedConversationId: "c1" }), "c1")).toBe(false);
+    expect(isActivelyReading(open, "c2")).toBe(false);
     expect(noticeChannel(true)).toBe("editor");
     expect(noticeChannel(false)).toBe("desktop");
     const prefs = { messages: true, friendRequests: true, friendAccepted: true };
@@ -108,5 +146,92 @@ describe("desktop notices", () => {
     expect(launch).toContain("notificationId=n9");
     expect(launch).toContain("conversationId=c1");
     expect(launch).not.toMatch(/Bearer|eyJ/);
+  });
+
+  test("suppresses a desktop notice only for the conversation on screen", () => {
+    const seen = new Set<string>();
+    const viewingA = reading();
+    expect(noticeFor("c1", "m-a", viewingA, seen, { senderLabel: "Ada" })).toBeNull();
+    expect(seen.has("m-a")).toBe(true);
+    const other = noticeFor("c2", "m-b", viewingA, seen, { senderLabel: "Grace" });
+    expect(other?.conversationId).toBe("c2");
+    expect(other?.body).toBe("Grace sent you a message");
+    const switched = reading({ activeConversationId: "c2", reportedConversationId: "c2" });
+    expect(noticeFor("c1", "m-c", switched, seen, { senderLabel: "Ada" })?.conversationId).toBe("c1");
+    const inbox = reading({ screen: "home", activeConversationId: "c1", reportedConversationId: "c1" });
+    expect(noticeFor("c1", "m-d", inbox, seen)?.screen).toBe("messages");
+    const switching = reading({ activeConversationId: "c2", reportedConversationId: "c1" });
+    expect(isActivelyReading(switching, "c1")).toBe(false);
+    expect(isActivelyReading(switching, "c2")).toBe(false);
+    const hidden = reading({ viewVisible: false, webviewDocumentVisible: false });
+    expect(noticeFor("c1", "m-e", hidden, seen)).not.toBeNull();
+    const background = reading({ windowFocused: false, windowActive: false, webviewFocused: false });
+    expect(noticeFor("c1", "m-f", background, seen)).not.toBeNull();
+    expect(noticeChannel(false)).toBe("desktop");
+    const webviewFocus = reading({ windowFocused: false, windowActive: undefined, webviewFocused: true });
+    expect(noticeFor("c1", "m-g", webviewFocus, seen)).toBeNull();
+  });
+
+  test("shows one notice when the same message arrives twice, then allows a later message", () => {
+    const seen = new Set<string>();
+    const away = reading({ screen: "friends", activeConversationId: "c1", reportedConversationId: null });
+    const first = noticeFor("c1", "m1", away, seen, { notificationId: "n1" });
+    expect(first?.id).toBe("m1");
+    expect(noticeFor("c1", "m1", away, seen, { notificationId: "n1" })).toBeNull();
+    expect(noticeFor("c1", "m2", away, seen)?.id).toBe("m2");
+  });
+
+  test("tracks the open conversation again after a webview reload and clears it on sign-out", () => {
+    const seen = new Set<string>();
+    const reloading = reading({ reportedConversationId: null, webviewDocumentVisible: false });
+    expect(isActivelyReading(reloading, "c1")).toBe(false);
+    expect(noticeFor("c1", "during-reload", reloading, seen)).not.toBeNull();
+    const restored = reading({ reportedConversationId: "c1", webviewDocumentVisible: true });
+    expect(noticeFor("c1", "after-reload", restored, seen)).toBeNull();
+    const signedOut = reading({
+      screen: "login",
+      activeConversationId: null,
+      reportedConversationId: null,
+      webviewDocumentVisible: false,
+      webviewFocused: false,
+      viewVisible: false,
+    });
+    expect(isActivelyReading(signedOut, "c1")).toBe(false);
+    expect(noticeFor("c1", "after-signout", signedOut, seen)).not.toBeNull();
+  });
+
+  test("still notifies for a different person and stays quiet for a blocked sender", () => {
+    const seen = new Set<string>();
+    const viewingA = reading();
+    const other = noticeFor("c2", "from-other", viewingA, seen, { senderLabel: "Grace" });
+    expect(other?.body).toBe("Grace sent you a message");
+    expect(other?.body).not.toContain("ciphertext");
+    const blocked = noticeFor("c2", "from-blocked", viewingA, seen, { senderBlocked: true, senderLabel: "hidden-plaintext" });
+    expect(blocked).toBeNull();
+    expect(JSON.stringify(blocked)).not.toContain("hidden-plaintext");
+  });
+
+  test("keeps the open chat message and its read receipt when the desktop notice is suppressed", () => {
+    const incoming = {
+      id: "m1",
+      conversationId: "c1",
+      senderId: "bob",
+      recipientId: "ada",
+      ciphertext: "e30=",
+      messageType: "TEXT" as const,
+      status: "SENT" as const,
+    };
+    const patch = mergeLiveMessage([], incoming, "c1", "ada", 0);
+    expect(patch.messages?.[0]?.id).toBe("m1");
+    expect(patch.bumpConversation).toBeUndefined();
+    const other = mergeLiveMessage([], { ...incoming, id: "m2", conversationId: "c2" }, "c1", "ada", 0);
+    expect(other.bumpConversation).toBe("c2");
+    expect(other.messages).toBeUndefined();
+    const read = mergeReceipt(patch.messages ?? [], { type: "READ", data: { messageId: "m1" } });
+    expect(read?.[0]?.status).toBe("READ");
+    expect(noticeFor("c1", "m1", reading(), new Set())).toBeNull();
+    expect(acceptLiveToast({ type: "NEW_MESSAGE", referenceId: "c1" }, "messages", "c1")).toBe(false);
+    expect(acceptLiveToast({ type: "NEW_MESSAGE", referenceId: "c2" }, "messages", "c1")).toBe(true);
+    expect(acceptLiveToast({ type: "FRIEND_REQUEST", referenceId: "c1" }, "messages", "c1")).toBe(true);
   });
 });

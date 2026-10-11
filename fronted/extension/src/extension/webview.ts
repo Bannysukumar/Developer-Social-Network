@@ -559,7 +559,7 @@ export function renderWebview(webview: Webview, state: HostState): string {
         <button class="btn quiet" type="button" data-settings="menu">Settings</button>
         <h1>About</h1>
         <p>DevConnect</p>
-        <p class="muted" id="about-version">Version 0.4.29</p>
+        <p class="muted" id="about-version">Version 0.4.30</p>
         <p class="muted">A developer network inside Visual Studio Code. Messages stay encrypted on your devices.</p>
       </div>
     </section>
@@ -595,6 +595,20 @@ export function renderWebview(webview: Webview, state: HostState): string {
     let lastMessageCount = 0;
     let openMenuId = "";
   let heldNew = 0;
+  let publishedViewing = "";
+  function publishViewing() {
+    const protectedScreens = ["home", "search", "user", "friends", "messages", "notifications", "profile", "settings"];
+    const visible = state.phase !== "ready"
+      ? "splash"
+      : (!state.authenticated && protectedScreens.indexOf(state.screen) >= 0 ? "login" : state.screen);
+    const conversationId = visible === "messages" && state.activeConversationId ? state.activeConversationId : null;
+    const documentVisible = document.visibilityState !== "hidden";
+    const webviewFocused = document.hasFocus();
+    const key = (conversationId || "") + ":" + (documentVisible ? "1" : "0") + ":" + (webviewFocused ? "1" : "0");
+    if (key === publishedViewing) return;
+    publishedViewing = key;
+    vscode.postMessage({ version: 1, type: "viewingConversation", conversationId: conversationId, documentVisible: documentVisible, webviewFocused: webviewFocused });
+  }
   let typingOn = false;
   let typingStopTimer = 0;
   const typingCommand = ${typingCommand.toString()};
@@ -1036,6 +1050,7 @@ export function renderWebview(webview: Webview, state: HostState): string {
       if (el.id === "back-btn" || el.id === "thread-back" || el.id === "thread-profile" || el.id === "send-btn" || el.id === "chat-filter" || el.id === "jump-latest" || el.id === "retry" || el.id === "dialog-ok" || el.id === "dialog-cancel" || el.id === "edit-profile" || el.id === "close-edit" || el.hasAttribute("data-go") || el.hasAttribute("data-toggle") || el.hasAttribute("data-settings") || el.hasAttribute("data-friend-tab") || el.classList.contains("toggle") || el.closest("#lightbox")) return;
       el.disabled = !!state.busy;
     });
+    publishViewing();
   }
   function ask(text, okLabel, action) {
     dialogAction = action;
@@ -1412,6 +1427,9 @@ export function renderWebview(webview: Webview, state: HostState): string {
   document.getElementById("resend-verify").addEventListener("click", () => vscode.postMessage({ version: 1, type: "resendVerification" }));
   document.getElementById("logout-btn").addEventListener("click", () => vscode.postMessage({ version: 1, type: "logout" }));
   window.addEventListener("message", (event) => { if (isState(event.data)) apply(event.data); });
+  document.addEventListener("visibilitychange", () => publishViewing());
+  window.addEventListener("focus", () => publishViewing());
+  window.addEventListener("blur", () => publishViewing());
   apply(state);
         vscode.postMessage({ version: 1, type: "ready" });
       })();

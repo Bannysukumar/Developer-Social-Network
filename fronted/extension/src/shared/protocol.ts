@@ -68,6 +68,13 @@ export const webviewMessageSchema = z.discriminatedUnion("type", [
   }).strict(),
   z.object({
     version: z.literal(1),
+    type: z.literal("viewingConversation"),
+    conversationId: z.string().min(1).nullable(),
+    documentVisible: z.boolean(),
+    webviewFocused: z.boolean(),
+  }).strict(),
+  z.object({
+    version: z.literal(1),
     type: z.literal("uploadAvatar"),
     contentType: z.enum(["image/jpeg", "image/png", "image/webp"]),
     dataBase64: z.string().min(1).max(2_900_000),

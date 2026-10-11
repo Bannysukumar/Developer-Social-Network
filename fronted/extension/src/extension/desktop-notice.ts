@@ -39,18 +39,93 @@ export function unreadMessageNotificationId(
 }
 
 /** Focused windows use the in-editor notice. Background windows use one Windows toast. */
-export function noticeChannel(windowFocused: boolean): "desktop" | "editor" {
-  return windowFocused ? "editor" : "desktop";
+export function noticeChannel(windowForeground: boolean): "desktop" | "editor" {
+  return windowForeground ? "editor" : "desktop";
 }
 
-/** True only while this window is focused and that conversation is on screen. */
-export function isActivelyReading(
+/**
+ * Whether this VS Code window is the foreground window.
+ * A focused webview clears `focused` while `active` stays true.
+ * Older builds omit `active`; those fall back to `focused`.
+ */
+export function windowInForeground(
   windowFocused: boolean,
-  viewVisible: boolean,
-  openConversationId: string | null,
-  conversationId: string,
+  windowActive: boolean | undefined,
+  webviewFocused = false,
 ): boolean {
-  return windowFocused && viewVisible && openConversationId === conversationId;
+  // `active` stays true when a webview inside this window has focus.
+  // `webviewFocused` covers builds that only clear `focused` and omit `active`.
+  if (windowActive === true || windowFocused) return true;
+  return webviewFocused;
+}
+
+/** Live signals for the one conversation whose thread is actually on screen. */
+export interface ReadingContext {
+  readonly windowFocused: boolean;
+  readonly windowActive?: boolean;
+  readonly viewVisible: boolean;
+  readonly screen: string;
+  readonly activeConversationId: string | null;
+  /** Last conversation this webview instance reported. Null after dispose, sign-out, or before the first report. */
+  readonly reportedConversationId: string | null;
+  readonly webviewDocumentVisible: boolean;
+  /** True when the chat webview document itself has focus. */
+  readonly webviewFocused: boolean;
+}
+
+/**
+ * True only when that conversation's thread is the one the user can see.
+ * A selected id, a hidden sidebar, or a background window does not count.
+ */
+export function isActivelyReading(reading: ReadingContext, conversationId: string): boolean {
+  if (!conversationId || !windowInForeground(reading.windowFocused, reading.windowActive, reading.webviewFocused)) return false;
+  if (!reading.viewVisible || !reading.webviewDocumentVisible) return false;
+  if (reading.screen !== "messages") return false;
+  if (reading.activeConversationId !== conversationId) return false;
+  return reading.reportedConversationId === conversationId;
+}
+
+export interface MessageNoticeInput {
+  readonly messageId: string;
+  readonly conversationId: string;
+  readonly senderIsSelf: boolean;
+  readonly senderBlocked: boolean;
+  readonly reading: ReadingContext;
+  readonly prefs: NoticePrefs;
+  readonly seen: ReadonlySet<string>;
+  readonly senderLabel?: string;
+  readonly notificationId?: string;
+}
+
+export interface MessageNoticeDecision {
+  readonly target: NoticeTarget | null;
+  /** Ids to remember when the notice is suppressed because the thread is already on screen. */
+  readonly rememberIds: readonly string[];
+}
+
+/** One desktop notice decision for an incoming message. Recording is separate from delivery. */
+export function resolveMessageNotice(input: MessageNoticeInput): MessageNoticeDecision {
+  if (input.senderBlocked || input.senderIsSelf) return { target: null, rememberIds: [] };
+  if (input.seen.has(input.messageId) || (input.notificationId !== undefined && input.seen.has(input.notificationId))) {
+    return { target: null, rememberIds: [] };
+  }
+  const viewing = isActivelyReading(input.reading, input.conversationId);
+  const target = decideMessageNotice(
+    input.messageId,
+    input.conversationId,
+    false,
+    viewing,
+    input.prefs,
+    input.seen,
+    input.senderLabel ?? "Someone",
+    input.notificationId,
+  );
+  if (target) return { target, rememberIds: input.notificationId ? [input.notificationId] : [] };
+  if (!viewing) return { target: null, rememberIds: [] };
+  return {
+    target: null,
+    rememberIds: input.notificationId ? [input.messageId, input.notificationId] : [input.messageId],
+  };
 }
 
 export function decideStoredNotice(

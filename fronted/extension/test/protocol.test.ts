@@ -48,6 +48,12 @@ describe("Webview bridge protocol", () => {
     expect(webviewMessageSchema.safeParse({ version: 1, type: "ready" }).success).toBe(true);
     expect(webviewMessageSchema.safeParse({ version: 1, type: "navigate", destination: "forgot" }).success).toBe(true);
     expect(webviewMessageSchema.safeParse({ version: 1, type: "back" }).success).toBe(true);
+    expect(webviewMessageSchema.safeParse({
+      version: 1, type: "viewingConversation", conversationId: "c1", documentVisible: true, webviewFocused: true,
+    }).success).toBe(true);
+    expect(webviewMessageSchema.safeParse({
+      version: 1, type: "viewingConversation", conversationId: null, documentVisible: false, webviewFocused: false,
+    }).success).toBe(true);
     expect(webviewMessageSchema.safeParse({ version: 1, type: "navigate", destination: "settings-secret" }).success).toBe(false);
   });
 
