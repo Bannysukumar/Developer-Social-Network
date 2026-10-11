@@ -47,18 +47,20 @@ export function noticeChannel(windowForeground: boolean): Exclude<NoticeChannel,
 }
 
 /**
- * Whether this VS Code window is the foreground application.
- * `active` stays true when a webview inside this window has focus.
- * Older builds omit `active` and report `focused: false` while the webview has focus.
- * A focused webview document is itself proof the window is in the foreground.
+ * Whether this VS Code window is the app the user is looking at.
+ * `focused` drops as soon as another application or the desktop is in front.
+ * `active` only means the window was used recently, so it stays true after you leave.
+ * A focused chat webview can clear `focused` while you are still inside VS Code.
  */
 export function windowInForeground(
   windowFocused: boolean,
   windowActive: boolean | undefined,
   webviewFocused = false,
 ): boolean {
+  if (windowActive === false) return false;
+  if (windowFocused) return true;
   if (webviewFocused) return true;
-  return typeof windowActive === "boolean" ? windowActive : windowFocused;
+  return false;
 }
 
 /** Foreground signal for a reading snapshot. Webview focus counts only while that view is open. */
@@ -89,13 +91,12 @@ export interface ReadingContext {
 /**
  * True only when that conversation's thread is on screen in the foreground VS Code window.
  * A selected id, a hidden sidebar, or a background window does not count.
- * Webview focus counts as foreground, because some editors clear `window.focused` while the chat has focus.
+ * The host view's visibility is the source of truth. The webview document can report
+ * itself hidden while the sidebar chat is still the screen the user is looking at.
  */
 export function isActivelyReading(reading: ReadingContext, conversationId: string): boolean {
   if (!conversationId || !readingIsForeground(reading)) return false;
   if (!reading.viewVisible) return false;
-  // A focused webview document is visible. Do not trust a host flag that was cleared while focus was inside it.
-  if (!reading.webviewDocumentVisible && !reading.webviewFocused) return false;
   if (reading.screen !== "messages") return false;
   if (reading.activeConversationId !== conversationId) return false;
   return reading.reportedConversationId === conversationId;
@@ -128,9 +129,7 @@ export function resolveMessageNotice(input: MessageNoticeInput): MessageNoticeDe
   const none = (reason: NoticeReason, rememberIds: readonly string[] = []): MessageNoticeDecision => ({ channel: "none", target: null, rememberIds, reason });
   if (input.senderBlocked) return none("blocked");
   if (input.senderIsSelf) return none("self");
-  if (input.seen.has(input.messageId) || (input.notificationId !== undefined && input.seen.has(input.notificationId))) {
-    return none("duplicate");
-  }
+  if (input.seen.has(input.messageId)) return none("duplicate");
   const viewing = isActivelyReading(input.reading, input.conversationId);
   const channel = routeNotice(viewing, readingIsForeground(input.reading));
   if (channel === "none") {

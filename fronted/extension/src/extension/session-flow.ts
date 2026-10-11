@@ -49,6 +49,8 @@ export class SessionFlow {
   private readInflight = new Set<string>();
   private readAgain = new Set<string>();
   private confirmedNotificationReads = new Set<string>();
+  /** Locally read while the open chat's mark-read request is still in flight. */
+  private optimisticNotificationReads = new Set<string>();
   private notificationAckInflight = new Set<string>();
   private notificationAckQueued = new Set<string>();
   private notificationAckAgain = new Set<string>();
@@ -259,7 +261,12 @@ export class SessionFlow {
     }
     const note = notificationFromFrame(frame);
     if (!note) return;
-    const patch = mergeNotification(this.notifications, note, this.unreadNotifications, this.toastSeq, this.confirmedNotificationReads);
+    const viewingThisMessage = note.type === "NEW_MESSAGE" && !!note.referenceId && this.viewingConversation(note.referenceId);
+    const incoming = viewingThisMessage && !note.read && !this.confirmedNotificationReads.has(note.id)
+      ? { ...note, read: true }
+      : note;
+    if (incoming !== note) this.optimisticNotificationReads.add(note.id);
+    const patch = mergeNotification(this.notifications, incoming, this.unreadNotifications, this.toastSeq, this.confirmedNotificationReads);
     if (patch.notifications) this.notifications = patch.notifications;
     if (patch.unreadNotifications !== undefined) this.unreadNotifications = patch.unreadNotifications;
     if (patch.toast && acceptLiveToast(note)) {
@@ -329,6 +336,7 @@ export class SessionFlow {
     this.typingTimer = undefined;
     this.seenMessageIds.clear();
     this.confirmedNotificationReads.clear();
+    this.optimisticNotificationReads.clear();
     this.notificationAckInflight.clear();
     this.notificationAckQueued.clear();
     this.notificationAckAgain.clear();
@@ -487,11 +495,16 @@ export class SessionFlow {
   }
 
   private async acknowledge(notificationId: string): Promise<void> {
-    if (this.confirmedNotificationReads.has(notificationId) || this.notificationAckInflight.has(notificationId)) return;
+    if (this.confirmedNotificationReads.has(notificationId)) {
+      this.optimisticNotificationReads.delete(notificationId);
+      return;
+    }
+    if (this.notificationAckInflight.has(notificationId)) return;
     this.notificationAckInflight.add(notificationId);
     try {
       const updated = await this.auth.markNotificationRead(notificationId);
       this.confirmedNotificationReads.add(updated.id);
+      this.optimisticNotificationReads.delete(updated.id);
       this.notificationEpoch += 1;
       const applied = applyNotificationRead(this.notifications, this.unreadNotifications, updated);
       this.notifications = applied.notifications;
@@ -510,8 +523,29 @@ export class SessionFlow {
     return this.screen === "messages" && this.activeConversationId === conversationId;
   }
 
+  private protectedNotificationReads(): ReadonlySet<string> {
+    if (this.optimisticNotificationReads.size === 0) return this.confirmedNotificationReads;
+    return new Set([...this.confirmedNotificationReads, ...this.optimisticNotificationReads]);
+  }
+
+  private revertOptimisticRead(notificationId: string): void {
+    if (!this.optimisticNotificationReads.delete(notificationId)) return;
+    if (this.confirmedNotificationReads.has(notificationId)) return;
+    const existing = this.notifications.find((item) => item.id === notificationId);
+    if (!existing || !existing.read) return;
+    this.notifications = this.notifications.map((item) => item.id === notificationId ? { ...item, read: false } : item);
+    this.unreadNotifications += 1;
+  }
+
+  private revertOptimisticConversation(conversationId: string): void {
+    for (const id of [...this.optimisticNotificationReads]) {
+      const note = this.notifications.find((item) => item.id === id);
+      if (note?.type === "NEW_MESSAGE" && note.referenceId === conversationId) this.revertOptimisticRead(id);
+    }
+  }
+
   private applyServerNotifications(items: HostState["notifications"], unreadCount: number): void {
-    const absorbed = absorbServerNotifications(items, unreadCount, this.confirmedNotificationReads);
+    const absorbed = absorbServerNotifications(items, unreadCount, this.protectedNotificationReads());
     this.notifications = absorbed.notifications;
     this.unreadNotifications = absorbed.unreadCount;
   }
@@ -528,12 +562,21 @@ export class SessionFlow {
   /** Marks every unread message notification for this conversation. Other types and conversations stay unread. */
   private async acknowledgeConversation(conversationId: string, onlyWhileViewing = false): Promise<void> {
     const allowed = () => !onlyWhileViewing || this.viewingConversation(conversationId);
-    if (!allowed()) return;
-    let pending = unreadMessageNotificationsForConversation(this.notifications, conversationId);
+    if (!allowed()) {
+      this.revertOptimisticConversation(conversationId);
+      return;
+    }
+    let pending = this.notifications.filter((note) => note.type === "NEW_MESSAGE"
+      && note.referenceId === conversationId
+      && !this.confirmedNotificationReads.has(note.id)
+      && (!note.read || this.optimisticNotificationReads.has(note.id)));
     if (pending.length === 0) {
       const epoch = this.notificationEpoch;
       const notes = await this.auth.loadNotifications();
-      if (!allowed() || epoch !== this.notificationEpoch) return;
+      if (!allowed() || epoch !== this.notificationEpoch) {
+        this.revertOptimisticConversation(conversationId);
+        return;
+      }
       for (const item of notes.items) {
         if (this.notifications.some((note) => note.id === item.id)) continue;
         const patch = mergeNotification(this.notifications, item, this.unreadNotifications, this.toastSeq, this.confirmedNotificationReads);
@@ -543,11 +586,14 @@ export class SessionFlow {
       pending = unreadMessageNotificationsForConversation(this.notifications, conversationId);
     }
     for (const note of pending) {
-      if (!allowed()) return;
+      if (!allowed()) {
+        this.revertOptimisticConversation(conversationId);
+        return;
+      }
       try {
         await this.acknowledge(note.id);
       } catch {
-        // Leave this notification unread. A later view of the conversation can retry.
+        this.revertOptimisticRead(note.id);
       }
     }
   }

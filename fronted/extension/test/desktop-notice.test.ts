@@ -124,10 +124,14 @@ describe("desktop notices", () => {
     expect(routeNotice(true, false)).toBe("none");
     expect(routeNotice(false, true)).toBe("editor");
     expect(routeNotice(false, false)).toBe("desktop");
-    expect(windowInForeground(false, true)).toBe(true);
+    expect(windowInForeground(false, true)).toBe(false);
+    expect(windowInForeground(false, true, true)).toBe(true);
     expect(windowInForeground(false, false)).toBe(false);
+    expect(windowInForeground(false, false, true)).toBe(false);
+    expect(windowInForeground(false, undefined, true)).toBe(true);
     expect(windowInForeground(false, undefined)).toBe(false);
     expect(windowInForeground(true, undefined)).toBe(true);
+    expect(windowInForeground(true, true, false)).toBe(true);
     const prefs = { messages: true, friendRequests: true, friendAccepted: true };
     const stored = decideStoredNotice({
       id: "n9",
@@ -195,9 +199,10 @@ describe("desktop notices", () => {
       seen,
       notificationId: "note-focus",
     });
-    expect(first.channel).toBe("none");
-    expect(first.reason).toBe("viewing");
+    expect(first.channel).toBe("desktop");
+    expect(first.target?.id).toBe("m-focus");
     for (const id of first.rememberIds) seen.add(id);
+    if (first.target) seen.add(first.target.id);
     const replay = resolveMessageNotice({
       messageId: "m-focus",
       conversationId: "c1",
@@ -210,6 +215,19 @@ describe("desktop notices", () => {
     });
     expect(replay.channel).toBe("none");
     expect(replay.reason).toBe("duplicate");
+    const otherWhileMinimized = resolveMessageNotice({
+      messageId: "m-other",
+      conversationId: "c2",
+      senderIsSelf: false,
+      senderBlocked: false,
+      reading: focusedChat,
+      prefs,
+      seen,
+      notificationId: "note-a",
+    });
+    expect(otherWhileMinimized.channel).toBe("desktop");
+    expect(otherWhileMinimized.target?.id).toBe("m-other");
+    seen.add("m-other");
     expect(resolveMessageNotice({
       messageId: "m-other",
       conversationId: "c2",
@@ -218,16 +236,63 @@ describe("desktop notices", () => {
       reading: focusedChat,
       prefs,
       seen,
+      notificationId: "note-a",
+    }).reason).toBe("duplicate");
+    const openButUnfocusedDocument = reading({ webviewDocumentVisible: false, webviewFocused: false });
+    expect(isActivelyReading(openButUnfocusedDocument, "c1")).toBe(true);
+    expect(resolveMessageNotice({
+      messageId: "m-open",
+      conversationId: "c1",
+      senderIsSelf: false,
+      senderBlocked: false,
+      reading: openButUnfocusedDocument,
+      prefs,
+      seen,
+    }).channel).toBe("none");
+    expect(resolveMessageNotice({
+      messageId: "m-other-open",
+      conversationId: "c2",
+      senderIsSelf: false,
+      senderBlocked: false,
+      reading: openButUnfocusedDocument,
+      prefs,
+      seen,
     }).channel).toBe("editor");
     const webviewInsideForeground = reading({ windowFocused: false, windowActive: true, webviewFocused: true });
     expect(noticeFor("c1", "m-g", webviewInsideForeground, seen)).toBeNull();
-    const otherWhileAway = reading({ windowFocused: false, windowActive: false, activeConversationId: "c1", reportedConversationId: "c1" });
+    const otherApp = reading({
+      windowFocused: false,
+      windowActive: true,
+      webviewFocused: false,
+      webviewDocumentVisible: true,
+      activeConversationId: "c1",
+      reportedConversationId: "c1",
+    });
+    expect(isActivelyReading(otherApp, "c1")).toBe(false);
+    expect(resolveMessageNotice({
+      messageId: "m-desktop-a",
+      conversationId: "c1",
+      senderIsSelf: false,
+      senderBlocked: false,
+      reading: otherApp,
+      prefs,
+      seen,
+    }).channel).toBe("desktop");
+    expect(resolveMessageNotice({
+      messageId: "m-desktop-b",
+      conversationId: "c2",
+      senderIsSelf: false,
+      senderBlocked: false,
+      reading: otherApp,
+      prefs,
+      seen,
+    }).channel).toBe("desktop");
     expect(resolveMessageNotice({
       messageId: "m-b-away",
       conversationId: "c2",
       senderIsSelf: false,
       senderBlocked: false,
-      reading: otherWhileAway,
+      reading: otherApp,
       prefs,
       seen,
     }).channel).toBe("desktop");
@@ -249,7 +314,10 @@ describe("desktop notices", () => {
     const first = noticeFor("c1", "m1", away, seen, { notificationId: "n1" });
     expect(first?.id).toBe("m1");
     expect(noticeFor("c1", "m1", away, seen, { notificationId: "n1" })).toBeNull();
-    expect(noticeFor("c1", "m2", away, seen)?.id).toBe("m2");
+    const later = noticeFor("c1", "m2", away, seen, { notificationId: "n1" });
+    expect(later?.id).toBe("m2");
+    expect(later?.notificationId).toBe("n1");
+    expect(noticeFor("c1", "m2", away, seen, { notificationId: "n1" })).toBeNull();
   });
 
   test("tracks the open conversation again after a webview reload and clears it on sign-out", () => {
@@ -269,6 +337,106 @@ describe("desktop notices", () => {
     });
     expect(isActivelyReading(signedOut, "c1")).toBe(false);
     expect(noticeFor("c1", "after-signout", signedOut, seen)).not.toBeNull();
+  });
+
+  test("regression: leaving a chat, hiding the view, or minimizing uses one channel and does not repeat a seen message", () => {
+    const seen = new Set<string>();
+    const viewingA = reading();
+    const sameChat = resolveMessageNotice({
+      messageId: "m-a",
+      conversationId: "c1",
+      senderIsSelf: false,
+      senderBlocked: false,
+      reading: viewingA,
+      prefs,
+      seen,
+      notificationId: "note-a",
+    });
+    expect(sameChat.channel).toBe("none");
+    expect(sameChat.reason).toBe("viewing");
+    expect(sameChat.target).toBeNull();
+    for (const id of sameChat.rememberIds) seen.add(id);
+
+    const switched = reading({ activeConversationId: "c2", reportedConversationId: "c2" });
+    const backToA = resolveMessageNotice({
+      messageId: "m-a2",
+      conversationId: "c1",
+      senderIsSelf: false,
+      senderBlocked: false,
+      reading: switched,
+      prefs,
+      seen,
+    });
+    expect(backToA.channel).toBe("editor");
+    expect(backToA.target?.conversationId).toBe("c1");
+    for (const id of backToA.rememberIds) seen.add(id);
+    if (backToA.target) seen.add(backToA.target.id);
+
+    const coalesced = resolveMessageNotice({
+      messageId: "m-a3",
+      conversationId: "c1",
+      senderIsSelf: false,
+      senderBlocked: false,
+      reading: switched,
+      prefs,
+      seen,
+      notificationId: "note-a",
+    });
+    expect(coalesced.channel).toBe("editor");
+    expect(coalesced.reason).toBe("editor");
+    expect(coalesced.target?.id).toBe("m-a3");
+
+    const search = reading({ screen: "search", activeConversationId: null, reportedConversationId: null });
+    expect(resolveMessageNotice({
+      messageId: "m-search",
+      conversationId: "c1",
+      senderIsSelf: false,
+      senderBlocked: false,
+      reading: search,
+      prefs,
+      seen,
+    }).channel).toBe("editor");
+
+    const hidden = reading({ viewVisible: false, webviewDocumentVisible: false, webviewFocused: false });
+    expect(resolveMessageNotice({
+      messageId: "m-hidden",
+      conversationId: "c1",
+      senderIsSelf: false,
+      senderBlocked: false,
+      reading: hidden,
+      prefs,
+      seen,
+    }).channel).toBe("editor");
+
+    const minimized = reading({
+      windowFocused: false,
+      windowActive: false,
+      webviewFocused: false,
+      webviewDocumentVisible: false,
+      viewVisible: true,
+    });
+    expect(resolveMessageNotice({
+      messageId: "m-min",
+      conversationId: "c1",
+      senderIsSelf: false,
+      senderBlocked: false,
+      reading: minimized,
+      prefs,
+      seen,
+    }).channel).toBe("desktop");
+
+    const replay = resolveMessageNotice({
+      messageId: "m-a",
+      conversationId: "c1",
+      senderIsSelf: false,
+      senderBlocked: false,
+      reading: minimized,
+      prefs,
+      seen,
+      notificationId: "note-a",
+    });
+    expect(replay.channel).toBe("none");
+    expect(replay.reason).toBe("duplicate");
   });
 
   test("still notifies for a different person and stays quiet for a blocked sender", () => {

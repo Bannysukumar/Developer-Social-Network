@@ -234,12 +234,9 @@ class DevConnectHost implements vscode.WebviewViewProvider, vscode.Disposable {
       this.logNoticeRoute(message?.id ?? "notification", message?.conversationId ?? notificationFromFrame(frame)?.referenceId ?? "", decision?.channel ?? "none", decision?.reason ?? "disabled");
       return;
     }
-    for (const id of decision?.rememberIds ?? []) {
-      if (!this.rememberNotice(id)) {
-        this.dropNotice(noticeSlot);
-        return;
-      }
-    }
+    // The coalesced notification id is remembered so a reconnect does not toast the same alert twice.
+    // A new message id must still be delivered when that file or set entry already exists.
+    for (const id of decision?.rememberIds ?? []) this.rememberNotice(id);
     const channel = decision?.channel === "editor" || decision?.channel === "desktop"
       ? decision.channel
       : noticeChannel(this.windowIsForeground());
@@ -272,10 +269,11 @@ class DevConnectHost implements vscode.WebviewViewProvider, vscode.Disposable {
     };
   }
 
-  /** Foreground comes from VS Code window state. A focused chat webview keeps the window in the foreground. */
+  /** Foreground comes from VS Code window state. An inactive window is not foreground, even if a webview focus flag is still set. */
   noteWindowState(state: { focused: boolean; active?: boolean }): void {
     this.windowFocused = state.focused;
     this.windowActive = state.active;
+    if (state.active === false) this.webviewFocused = false;
   }
 
   private clearViewing(): void {
@@ -305,8 +303,9 @@ class DevConnectHost implements vscode.WebviewViewProvider, vscode.Disposable {
     this.output.appendLine(`notice show id=${target.id} channel=${channel} viewVisible=${this.view?.visible === true}`);
     if (channel === "desktop") {
       const launch = noticeLaunchUri("Bannysukumar2255", "devconnect-vscode-extension", target);
+      this.output.appendLine(`windows toast attempt id=${target.id}`);
       const toast = await showBackgroundNotice(this.toastScript, target.body, launch);
-      this.output.appendLine(`windows toast ok=${toast.ok} submitted=${toast.submitted} detail=${toast.detail}`);
+      this.output.appendLine(`windows toast submitted=${toast.submitted} ok=${toast.ok} detail=${toast.detail}`);
       if (!shouldUseEditorFallback(toast)) return;
       this.output.appendLine("notice fallback=editor reason=native-toast-not-submitted");
     }

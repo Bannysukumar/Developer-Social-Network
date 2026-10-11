@@ -41,6 +41,7 @@ function createFlow(initial: Note[] = [], route?: { screen: string; conversation
   let serveStale = false;
   let held: Promise<void> | null = null;
   let releaseHold: (() => void) | undefined;
+  const failIds = new Set<string>();
   const auth = {
     apiConfig: { baseUrl: "https://api.example.test/api/v1", allowInsecureHttp: false },
     isAuthenticated: () => true,
@@ -69,6 +70,7 @@ function createFlow(initial: Note[] = [], route?: { screen: string; conversation
       conversationReads.push(conversationId);
     },
     markNotificationRead: async (id: string) => {
+      if (failIds.has(id)) throw new Error("read failed");
       const found = notes.find((note) => note.id === id);
       if (!found) throw new Error(`unknown notification ${id}`);
       found.read = true;
@@ -95,6 +97,9 @@ function createFlow(initial: Note[] = [], route?: { screen: string; conversation
       held = new Promise((resolve) => {
         releaseHold = resolve;
       });
+    },
+    failRead(id: string) {
+      failIds.add(id);
     },
     releaseLoad() {
       releaseHold?.();
@@ -152,6 +157,33 @@ describe("notification read sync", () => {
     expect(state.notifications.find((note) => note.id === "note-friend")?.read).toBe(false);
     expect(state.unreadNotifications).toBe(2);
     expect(state.toast).toBeNull();
+  });
+
+  test("an open chat does not show the new message notification as unread before the read request finishes", async () => {
+    const harness = createFlow([other, friend]);
+    await harness.flow.bootstrap();
+    await harness.flow.handleMessage({ version: 1, type: "openConversation", conversationId: "c1" });
+    await settle();
+    const unreadBefore = harness.flow.snapshot().unreadNotifications;
+    harness.flow.ingestFrame(messageFrame("m1", "c1"));
+    harness.notes.unshift({ ...activeNote });
+    harness.flow.ingestFrame(noteFrame(activeNote));
+
+    const immediate = harness.flow.snapshot();
+    expect(immediate.messages.some((item) => item.id === "m1")).toBe(true);
+    expect(immediate.notifications.find((note) => note.id === "note-a")?.read).toBe(true);
+    expect(immediate.unreadNotifications).toBe(unreadBefore);
+    expect(immediate.toast).toBeNull();
+
+    await settle();
+    const state = harness.flow.snapshot();
+    expect(state.notifications.find((note) => note.id === "note-a")?.read).toBe(true);
+    expect(state.notifications.find((note) => note.id === "note-b")?.read).toBe(false);
+    expect(state.notifications.find((note) => note.id === "note-friend")?.read).toBe(false);
+    expect(state.unreadNotifications).toBe(unreadBefore);
+    expect(harness.marked).toEqual(["note-a"]);
+    harness.flow.ingestFrame(noteFrame({ ...activeNote, read: false }));
+    expect(harness.flow.snapshot().notifications.find((note) => note.id === "note-a")?.read).toBe(true);
   });
 
   test("a message in another conversation keeps its notification unread", async () => {
@@ -296,6 +328,35 @@ describe("notification read sync", () => {
     await harness.flow.handleMessage({ version: 1, type: "loadNotifications" });
     expect(harness.flow.snapshot().notifications.find((note) => note.id === "note-a")?.read).toBe(true);
     expect(harness.flow.snapshot().unreadNotifications).toBe(2);
+  });
+
+  test("a failed read request leaves that notification unread", async () => {
+    const harness = createFlow([activeNote, other, friend]);
+    harness.failRead("note-a");
+    await harness.flow.bootstrap();
+    await harness.flow.handleMessage({ version: 1, type: "openConversation", conversationId: "c1" });
+    await settle();
+    expect(harness.marked).not.toContain("note-a");
+    expect(harness.flow.snapshot().notifications.find((note) => note.id === "note-a")?.read).toBe(false);
+    expect(harness.flow.snapshot().notifications.find((note) => note.id === "note-friend")?.read).toBe(false);
+  });
+
+  test("repeated notification refreshes keep a confirmed read and the other conversation unread", async () => {
+    const harness = createFlow([activeNote, other, friend]);
+    await harness.flow.bootstrap();
+    await harness.flow.handleMessage({ version: 1, type: "openConversation", conversationId: "c1" });
+    await settle();
+    for (let refresh = 0; refresh < 3; refresh += 1) {
+      await harness.flow.handleMessage({ version: 1, type: "loadNotifications" });
+    }
+    harness.flow.ingestFrame(noteFrame({ ...activeNote, read: false }));
+    const state = harness.flow.snapshot();
+    expect(state.notifications.find((note) => note.id === "note-a")?.read).toBe(true);
+    expect(state.notifications.find((note) => note.id === "note-b")?.read).toBe(false);
+    expect(state.notifications.find((note) => note.id === "note-friend")?.read).toBe(false);
+    expect(state.unreadNotifications).toBe(2);
+    expect(harness.marked).toEqual(["note-a"]);
+    expect(harness.marked).not.toContain("m1");
   });
 
   test("message notices stay on the host channel and friend requests still toast in the view", async () => {
