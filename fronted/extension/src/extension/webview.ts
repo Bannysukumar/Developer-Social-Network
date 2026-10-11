@@ -571,7 +571,7 @@ export function renderWebview(webview: Webview, state: HostState): string {
         <button class="btn quiet" type="button" data-settings="menu">Settings</button>
         <h1>About</h1>
         <p>DevConnect</p>
-        <p class="muted" id="about-version">Version 0.4.41</p>
+        <p class="muted" id="about-version">Version 0.4.43</p>
         <p class="muted">A developer network inside Visual Studio Code. Messages stay encrypted on your devices.</p>
       </div>
     </section>
@@ -866,6 +866,7 @@ export function renderWebview(webview: Webview, state: HostState): string {
     thread.hidden = !inThread;
     const openChat = (state.conversations || []).find((item) => item.id === state.activeConversationId);
     const person = openChat ? chatPerson(openChat) : { name: "Chat", username: "" };
+    const savedChat = !!(openChat && openChat.updatedAt && openChat.createdAt && openChat.updatedAt !== openChat.createdAt);
     document.getElementById("thread-name").textContent = person.name;
     const otherId = openChat && state.user ? (openChat.participantIds || []).find((id) => id !== state.user.id) : "";
     const blockedPeer = !!(otherId && (state.blockedUsers || []).some((user) => user.id === otherId));
@@ -921,6 +922,7 @@ export function renderWebview(webview: Webview, state: HostState): string {
         ? '<div class="history-note"><span>' + esc(state.historyError) + '</span> <button class="btn" type="button" data-act="load-older">Try again</button></div>'
         : "";
     const threadBody = ordered.length ? ordered.map((m) => {
+      try {
       const day = dateSeparatorLabel(m.createdAt, nowMs);
       const separator = day && day !== lastDay ? (lastDay = day, '<div class="day-sep">' + esc(day) + '</div>') : "";
       const mine = !!(state.user && m.senderId === state.user.id);
@@ -960,10 +962,13 @@ export function renderWebview(webview: Webview, state: HostState): string {
         ? '<button class="btn" type="button" data-act="retry-files" data-id="' + esc(m.id) + '">Retry</button>'
         : retry;
       return separator + '<div class="msg ' + (mine ? "mine" : "theirs") + (failed ? " failed" : "") + (deleted ? " deleted" : "") + '">' + (deleted ? "" : files) + (m.displayText ? esc(m.displayText) : "") + '<div class="msg-meta">' + esc(clock(m.createdAt)) + receipt + actions + '</div>' + menu + (failed ? '<div class="msg-meta">' + esc(m.sendError || "Message failed to send.") + '</div>' + retryFiles : "") + '</div>';
+      } catch (ignored) {
+        return '<div class="msg">' + esc(m && m.displayText ? m.displayText : "Message") + '</div>';
+      }
     }).join("") : state.historyLoading
       ? '<div class="history-note muted">Loading messages…</div>'
-      : (state.historyError || state.error)
-        ? '<div class="history-note"><span>' + esc(state.historyError || state.error) + '</span> <button class="btn" type="button" data-act="reopen-chat">Try again</button></div>'
+      : (state.historyError || state.error || savedChat)
+        ? '<div class="history-note"><span>' + esc(state.historyError || state.error || "Saved messages did not load.") + '</span> <button class="btn" type="button" data-act="reopen-chat">Try again</button></div>'
         : '<div class="chat-empty">' + avatarMarkup({ displayName: person.name, username: person.username }, "lg") + '<strong>You\\'re connected with ' + esc(person.name) + '</strong><span class="muted">Start the conversation by saying hello.</span></div>';
     list.innerHTML = historyBanner + threadBody;
     if (switchedThread) {

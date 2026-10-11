@@ -1,26 +1,22 @@
-/** Local calendar parts. Today and Yesterday follow the viewer's timezone, not UTC. */
-function calendarParts(value: Date): { year: number; month: number; day: number } {
-  return { year: value.getFullYear(), month: value.getMonth(), day: value.getDate() };
-}
-
-function sameDay(left: Date, right: Date): boolean {
-  const a = calendarParts(left);
-  const b = calendarParts(right);
-  return a.year === b.year && a.month === b.month && a.day === b.day;
-}
-
 /**
  * WhatsApp-style day label for a persisted timestamp.
  * `now` is the viewer's current local time. Labels use the local calendar day.
+ * This function is copied into the webview, so it cannot call other module helpers.
  */
 export function dateSeparatorLabel(iso: string | undefined, now: Date | number = new Date()): string {
+  const parts = (value: Date) => ({ year: value.getFullYear(), month: value.getMonth(), day: value.getDate() });
+  const same = (left: Date, right: Date) => {
+    const a = parts(left);
+    const b = parts(right);
+    return a.year === b.year && a.month === b.month && a.day === b.day;
+  };
   if (!iso) return "";
   const date = new Date(iso);
   const current = now instanceof Date ? now : new Date(now);
   if (Number.isNaN(date.getTime()) || Number.isNaN(current.getTime())) return "";
-  if (sameDay(date, current)) return "Today";
+  if (same(date, current)) return "Today";
   const yesterday = new Date(current.getFullYear(), current.getMonth(), current.getDate() - 1);
-  if (sameDay(date, yesterday)) return "Yesterday";
+  if (same(date, yesterday)) return "Yesterday";
   const sameYear = date.getFullYear() === current.getFullYear();
   return date.toLocaleDateString("en-GB", {
     weekday: "long",

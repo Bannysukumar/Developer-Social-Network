@@ -293,7 +293,8 @@ export class AuthService {
     if (options.conversationId) {
       conversation = await this.conversationsApi.get(options.conversationId);
     } else if (options.participantId) {
-      conversation = await this.conversationsApi.create(options.participantId);
+      const existing = (await this.conversationsApi.list()).items.find((item) => item.participantIds.includes(options.participantId ?? ""));
+      conversation = existing ?? await this.conversationsApi.create(options.participantId);
     } else {
       throw new ApiError("request", "Choose a friend or conversation first.");
     }
@@ -520,7 +521,11 @@ export class AuthService {
   }
 
   private toDisplayMessage(message: MessageDto): DisplayMessage {
-    return this.displayMessage(message);
+    try {
+      return this.displayMessage(message);
+    } catch {
+      return { ...message, displayText: "Encrypted message" };
+    }
   }
 
   private describeMessage(message: MessageDto): { displayText: string; attachments?: readonly SharedFile[] } {

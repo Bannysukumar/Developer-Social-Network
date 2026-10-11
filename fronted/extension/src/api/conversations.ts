@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type { ApiClient } from "./client";
 import { ApiError } from "./errors";
 import { pathId } from "./users";
@@ -5,7 +6,6 @@ import {
   attachmentCreatedSchema,
   conversationSchema,
   createConversationRequestSchema,
-  cursorPageSchema,
   messageSchema,
   pageSchema,
   sendMessageRequestSchema,
@@ -15,7 +15,6 @@ import {
 } from "../shared/api-types";
 
 const conversationPageSchema = pageSchema(conversationSchema);
-const messageCursorSchema = cursorPageSchema(messageSchema);
 
 export type ConversationPage = {
   readonly items: readonly ConversationDto[];
@@ -31,6 +30,12 @@ export type MessageCursorPage = {
   readonly nextCursor: string | null;
   readonly hasNext: boolean;
 };
+
+const looseMessagePageSchema = z.object({
+  items: z.array(z.unknown()),
+  nextCursor: z.string().nullable().optional(),
+  hasNext: z.boolean().optional(),
+}).passthrough();
 
 export class ConversationsApi {
   constructor(private readonly client: ApiClient) {}
@@ -56,15 +61,24 @@ export class ConversationsApi {
     });
   }
 
-  listMessages(conversationId: string, limit = 30, cursor?: string): Promise<MessageCursorPage> {
-    return this.client.request(
+  async listMessages(conversationId: string, limit = 30, cursor?: string): Promise<MessageCursorPage> {
+    const page = await this.client.request(
       `conversations/${pathId(conversationId)}/messages`,
-      messageCursorSchema,
+      looseMessagePageSchema,
       {
         method: "GET",
+        timeoutMs: 60_000,
         query: { limit, cursor },
       },
     );
+    const items = page.items.flatMap((item) => {
+      const parsed = messageSchema.safeParse(item);
+      return parsed.success ? [parsed.data] : [];
+    });
+    if (page.items.length > 0 && items.length === 0) {
+      throw new ApiError("invalid_response", "Saved messages came back in a form the app couldn't read.");
+    }
+    return { items, nextCursor: page.nextCursor ?? null, hasNext: page.hasNext === true };
   }
 
   async uploadAttachment(conversationId: string, bytes: Uint8Array): Promise<{ id: string; size: number }> {

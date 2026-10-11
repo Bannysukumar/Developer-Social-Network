@@ -171,6 +171,9 @@ export class SessionFlow {
       if (epoch !== this.historyEpoch) return;
       this.rememberConversation(opened.conversation);
       this.acceptHistory(opened);
+      if (opened.messages.length === 0 && opened.conversation.updatedAt && opened.conversation.updatedAt !== opened.conversation.createdAt) {
+        this.historyError = "Saved messages didn't load. Try again.";
+      }
       this.finishOpen(opened.conversation.id, opened.messages[0]?.displayText, opened.conversation.participantIds);
       this.pushState();
       this.conversations = await this.auth.listConversations();
