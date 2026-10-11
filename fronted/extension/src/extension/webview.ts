@@ -12,6 +12,7 @@ import type { ScreenId } from "../shared/flow";
 import type { HostMessage } from "../shared/protocol";
 import type { DisplayMessage } from "./auth-service";
 import { chatActivity } from "./presence-state";
+import { attachmentCaption, fileKind, fileTypeLabel } from "./attachment-layout";
 import { dateSeparatorLabel, shouldLoadOlderHistory } from "./date-label";
 import { TYPING_IDLE_MS, typingCommand } from "./typing-debounce";
 
@@ -195,7 +196,9 @@ export function renderWebview(webview: Webview, state: HostState): string {
   .banner { padding: 8px 10px; border-radius: 6px; font-size: 12px; }
   .banner.error { color: var(--vscode-errorForeground); background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent); }
   .banner.notice { background: color-mix(in srgb, var(--vscode-focusBorder) 14%, transparent); }
-  .msg { max-width: 78%; align-self: flex-start; padding: 8px 10px; border-radius: 10px; background: color-mix(in srgb, var(--vscode-foreground) 8%, transparent); white-space: pre-wrap; word-break: break-word; }
+  .msg { max-width: 78%; align-self: flex-start; padding: 8px 10px; border-radius: 10px; background: color-mix(in srgb, var(--vscode-foreground) 8%, transparent); white-space: pre-wrap; word-break: break-word; box-sizing: border-box; }
+  .msg.media { width: max-content; max-width: min(320px, 100%); padding: 4px; }
+  .msg.media:has(.video-stage) { width: min(320px, 100%); }
   .msg.sealed { font-style: italic; opacity: 0.85; }
   .msg.deleted { font-style: italic; }
   .receipt { font-size: 11px; letter-spacing: -2px; opacity: .75; }
@@ -261,11 +264,18 @@ export function renderWebview(webview: Webview, state: HostState): string {
   .attach-card .file-glyph-box { display: grid; place-items: center; }
   .attach-card .name, .attach-card .size { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
   .attach-card .remove { position: absolute; top: 4px; right: 4px; width: 22px; height: 22px; min-width: 22px; padding: 0; border-radius: 11px; }
-  .file-card { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 6px; min-width: 0; }
-  .file-card span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .file-card { display: flex; gap: 8px; align-items: center; flex-wrap: nowrap; margin-top: 0; min-width: 0; width: max-content; max-width: min(280px, 100%); box-sizing: border-box; }
+  .video-card { display: grid; gap: 6px; width: 100%; max-width: 100%; box-sizing: border-box; }
+  .file-card span, .file-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .file-name { display: block; max-width: 160px; }
+  .file-copy { display: grid; min-width: 0; }
+  .video-stage { width: 100%; aspect-ratio: 16 / 9; max-height: 180px; display: grid; place-items: center; border-radius: 12px; background: color-mix(in srgb, var(--vscode-foreground) 10%, transparent); position: relative; }
+  .video-stage video { width: 100%; height: 100%; object-fit: contain; border-radius: 12px; background: #000; }
+  .video-play { width: 36px; height: 36px; min-width: 36px; padding: 0; border-radius: 18px; display: grid; place-items: center; border: 0; color: inherit; background: color-mix(in srgb, var(--vscode-editor-background) 72%, transparent); }
   .image-frame { position: relative; display: inline-block; max-width: 100%; }
   .image-bubble { display: block; padding: 0; border: 0; background: transparent; max-width: 100%; }
-  .image-bubble img { display: block; max-width: min(240px, 100%); max-height: 280px; width: auto; height: auto; object-fit: contain; border-radius: 12px; background: var(--vscode-input-background); }
+  .image-bubble img { display: block; max-width: min(320px, 100%); max-height: 240px; width: auto; height: auto; object-fit: contain; border-radius: 12px; background: var(--vscode-input-background); }
+  .msg-caption { margin-top: 4px; white-space: pre-wrap; word-break: break-word; }
   .image-bubble.loading { width: min(220px, 100%); height: 148px; border-radius: 12px; background: var(--vscode-input-background); position: relative; overflow: hidden; }
   .image-bubble.loading::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--vscode-foreground) 14%, transparent), transparent); }
   .image-error { display: grid; gap: 6px; min-width: 140px; padding: 8px; border-radius: 12px; background: var(--vscode-input-background); }
@@ -586,7 +596,7 @@ export function renderWebview(webview: Webview, state: HostState): string {
         <button class="btn quiet" type="button" data-settings="menu">Settings</button>
         <h1>About</h1>
         <p>DevConnect</p>
-        <p class="muted" id="about-version">Version 0.4.48</p>
+        <p class="muted" id="about-version">Version 0.4.49</p>
         <p class="muted">A developer network inside Visual Studio Code. Messages stay encrypted on your devices.</p>
       </div>
     </section>
@@ -647,6 +657,9 @@ export function renderWebview(webview: Webview, state: HostState): string {
   let dialogAction = null;
 
   const dateSeparatorLabel = ${dateSeparatorLabel.toString()};
+  const attachmentCaption = ${attachmentCaption.toString()};
+  const fileKind = ${fileKind.toString()};
+  const fileTypeLabel = ${fileTypeLabel.toString()};
   const shouldLoadOlderHistory = ${shouldLoadOlderHistory.toString()};
   let olderRequestArmed = true;
   let olderScrollReady = false;
@@ -965,24 +978,39 @@ export function renderWebview(webview: Webview, state: HostState): string {
       const menu = openMenuId === m.id
         ? '<div class="msg-menu">' + (mine && !deleted ? '<button class="btn danger" type="button" data-act="delete-everyone" data-id="' + esc(m.id) + '">Delete for everyone</button>' : "") + '<button class="btn" type="button" data-act="delete-me" data-id="' + esc(m.id) + '">Delete for me</button></div>'
         : "";
+      const attachmentNames = (m.attachments || []).map((file) => file.name || "");
       const files = (m.attachments || []).map((file) => {
-        if (file.mime && file.mime.startsWith("image/")) {
+        const kind = fileKind(file.mime);
+        const label = fileTypeLabel(file.mime, file.name || "");
+        const save = file.key ? '<button class="btn" type="button" data-act="save-attachment" data-id="' + esc(m.id) + '" data-file="' + esc(file.id) + '" aria-label="Save ' + esc(file.name || label) + '">Save</button>' : "";
+        if (kind === "image") {
           if (file.preview) {
             const uploading = m.sendState === "sending" ? '<span class="upload-bar" role="status" aria-label="Uploading"></span>' : "";
-            return '<div class="image-frame"><button class="image-bubble" type="button" data-act="open-preview" data-id="' + esc(file.id) + '" data-message="' + esc(m.id) + '" data-name="' + esc(file.name) + '"><img src="' + esc(file.preview) + '" alt="' + esc(file.name) + '"></button>' + uploading + '</div>';
+            return '<div class="image-frame"><button class="image-bubble" type="button" data-act="open-preview" data-id="' + esc(file.id) + '" data-message="' + esc(m.id) + '" data-name="' + esc(file.name) + '" aria-label="Open image ' + esc(file.name || "attachment") + '"><img src="' + esc(file.preview) + '" alt="' + esc(file.name || "Image") + '"></button>' + uploading + '</div>';
           }
           if (file.loadError) {
             return '<div class="image-error"><span>' + esc(file.loadDetail || "Couldn't load this image.") + '</span><button class="btn" type="button" data-act="reload-image" data-id="' + esc(m.id) + '" data-file="' + esc(file.id) + '">Try again</button></div>';
           }
           return '<div class="image-bubble loading" role="status" aria-label="Loading image"></div>';
         }
-        const save = file.key ? '<button class="btn" type="button" data-act="save-attachment" data-id="' + esc(m.id) + '" data-file="' + esc(file.id) + '">Save</button>' : "";
-        return '<div class="file-card"><span class="file-glyph" aria-hidden="true">📄</span><span>' + esc(file.name) + '</span><span class="muted">' + esc(fileSize(file.size)) + '</span>' + save + '</div>';
+        if (kind === "video") {
+          const player = file.preview
+            ? '<video controls preload="none" playsinline src="' + esc(file.preview) + '" aria-label="' + esc(file.name || "Video") + '"></video>'
+            : (file.key
+              ? '<button class="video-play" type="button" data-act="save-attachment" data-id="' + esc(m.id) + '" data-file="' + esc(file.id) + '" aria-label="Save video ' + esc(file.name || "attachment") + '">▶</button>'
+              : '<span class="video-play" aria-hidden="true">▶</span>');
+          return '<div class="video-card"><div class="video-stage" role="group" aria-label="Video ' + esc(file.name || "") + '">' + player + '</div><div class="file-copy"><span class="file-name" title="' + esc(file.name || "Video") + '">' + esc(file.name || "Video") + '</span><span class="muted">' + esc(label + (file.size ? " · " + fileSize(file.size) : "")) + '</span></div>' + save + '</div>';
+        }
+        const glyph = label === "PDF" ? "📕" : label === "Audio" ? "🎵" : label === "Archive" ? "🗜️" : "📄";
+        return '<div class="file-card"><span class="file-glyph" aria-hidden="true">' + glyph + '</span><span class="file-copy"><span class="file-name" title="' + esc(file.name || label) + '">' + esc(file.name || label) + '</span><span class="muted">' + esc(label + (file.size ? " · " + fileSize(file.size) : "")) + '</span></span>' + save + '</div>';
       }).join("");
+      const caption = deleted ? "" : attachmentCaption(m.displayText, attachmentNames);
+      const body = deleted ? "" : ((m.attachments || []).length ? (caption ? '<div class="msg-caption">' + esc(caption) + '</div>' : "") : (m.displayText ? esc(m.displayText) : ""));
       const retryFiles = (m.attachments || []).length && m.id.indexOf("local-") === 0
         ? '<button class="btn" type="button" data-act="retry-files" data-id="' + esc(m.id) + '">Retry</button>'
         : retry;
-      return separator + '<div class="msg ' + (mine ? "mine" : "theirs") + (failed ? " failed" : "") + (deleted ? " deleted" : "") + (m.sealed ? " sealed" : "") + '">' + (deleted ? "" : files) + (m.displayText ? esc(m.displayText) : "") + '<div class="msg-meta">' + esc(clock(m.createdAt)) + receipt + actions + '</div>' + menu + (failed ? '<div class="msg-meta">' + esc(m.sendError || "Message failed to send.") + '</div>' + retryFiles : "") + '</div>';
+      const media = !deleted && (m.attachments || []).length ? " media" : "";
+      return separator + '<div class="msg ' + (mine ? "mine" : "theirs") + (failed ? " failed" : "") + (deleted ? " deleted" : "") + (m.sealed ? " sealed" : "") + media + '">' + (deleted ? "" : files) + body + '<div class="msg-meta">' + esc(clock(m.createdAt)) + receipt + actions + '</div>' + menu + (failed ? '<div class="msg-meta">' + esc(m.sendError || "Message failed to send.") + '</div>' + retryFiles : "") + '</div>';
       } catch (ignored) {
         return '<div class="msg">' + esc(m && m.displayText ? m.displayText : "Message") + '</div>';
       }
