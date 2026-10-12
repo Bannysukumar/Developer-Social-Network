@@ -123,9 +123,12 @@ public class BlockService {
 
     public BlockStatusResponse unblock(String userId, String targetUserId) {
         Ids.require(targetUserId);
+        if (userId.equals(targetUserId)) {
+            throw new InvalidStateException("You cannot unblock yourself");
+        }
         requireActiveUser(targetUserId);
         if (blockRepository.findByBlockerIdAndBlockedId(userId, targetUserId).isEmpty()) {
-            throw new ResourceNotFoundException("Resource not found");
+            return status(userId, targetUserId);
         }
         blockRepository.deleteByBlockerIdAndBlockedId(userId, targetUserId);
         auditService.record(AuditEventType.USER_UNBLOCKED, userId, Map.of("targetUserId", targetUserId));

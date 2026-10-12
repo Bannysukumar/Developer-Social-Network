@@ -17,6 +17,8 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.Optional;
 
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -83,6 +85,37 @@ class BlockServiceTest {
 
         verify(blockRepository).deleteByBlockerIdAndBlockedId(ADA, BOB);
         verify(friendshipService, never()).createFriendship(any(), any());
+    }
+
+    @Test
+    void blockingTwiceDoesNotCreateAnotherRow() {
+        when(userRepository.findById(BOB)).thenReturn(Optional.of(active(BOB)));
+        when(blockRepository.existsByBlockerIdAndBlockedId(ADA, BOB)).thenReturn(true);
+
+        service.block(ADA, BOB);
+
+        verify(blockRepository, never()).save(any());
+    }
+
+    @Test
+    void unblockingWhenAlreadyUnblockedLeavesTheRelationshipAlone() {
+        when(userRepository.findById(BOB)).thenReturn(Optional.of(active(BOB)));
+        when(blockRepository.findByBlockerIdAndBlockedId(ADA, BOB)).thenReturn(Optional.empty());
+        when(blockRepository.existsByBlockerIdAndBlockedId(ADA, BOB)).thenReturn(false);
+        when(blockRepository.existsByBlockerIdAndBlockedId(BOB, ADA)).thenReturn(false);
+
+        var status = service.unblock(ADA, BOB);
+
+        assertThat(status.blockedByMe()).isFalse();
+        verify(blockRepository, never()).deleteByBlockerIdAndBlockedId(any(), any());
+        verify(friendshipService, never()).createFriendship(any(), any());
+    }
+
+    @Test
+    void aUserCannotBlockThemselves() {
+        assertThatThrownBy(() -> service.block(ADA, ADA))
+                .isInstanceOf(com.devconnect.socialnetwork.exception.InvalidStateException.class);
+        verify(blockRepository, never()).save(any());
     }
 
     private UserEntity active(String id) {

@@ -15,6 +15,7 @@ import { chatActivity } from "./presence-state";
 import { attachmentCaption, fileKind, fileTypeLabel } from "./attachment-layout";
 import { EMOJI_CATEGORIES, GIFS, QUICK_REACTIONS, STICKERS } from "./media-catalog";
 import { dateSeparatorLabel, shouldLoadOlderHistory } from "./date-label";
+import { chatBlockMenuActionForState, chatMenuMarkup } from "./chat-menu";
 import { TYPING_IDLE_MS, typingCommand } from "./typing-debounce";
 
 export interface HostState {
@@ -595,8 +596,8 @@ export function renderWebview(webview: Webview, state: HostState): string {
           </div>
           <button class="btn icon-btn" type="button" id="thread-profile" data-act="open-user" aria-label="View profile">↗</button>
           <button class="btn quiet icon-btn" type="button" id="thread-menu" data-act="thread-menu" aria-label="Chat options" aria-haspopup="menu" aria-expanded="false" aria-controls="thread-menu-pop">⋮</button>
-          <div id="thread-menu-pop" class="menu-pop" role="menu" hidden>
-            <button class="btn quiet danger" type="button" data-act="clear-chat" role="menuitem">Clear chat</button>
+          <div id="thread-menu-pop" class="menu-pop" role="menu" data-mode="${chatBlockMenuActionForState(state) ?? "none"}" hidden>
+            ${chatMenuMarkup(chatBlockMenuActionForState(state))}
           </div>
         </div>
         <p class="muted" id="thread-connection" hidden>Reconnecting...</p>
@@ -743,7 +744,7 @@ export function renderWebview(webview: Webview, state: HostState): string {
         <button class="btn quiet" type="button" data-settings="menu">Settings</button>
         <h1>About</h1>
         <p>DevConnect</p>
-        <p class="muted" id="about-version">Version 0.4.55</p>
+        <p class="muted" id="about-version">Version 0.4.56</p>
         <p class="muted">A developer network inside Visual Studio Code. Messages stay encrypted on your devices.</p>
       </div>
     </section>
@@ -1156,6 +1157,20 @@ export function renderWebview(webview: Webview, state: HostState): string {
       threadMenu.hidden = !state.activeConversationId;
       threadMenu.disabled = !!state.busy;
       threadMenu.setAttribute("aria-expanded", threadMenuOpen ? "true" : "false");
+      if (state.busy) threadMenu.setAttribute("aria-busy", "true");
+      else threadMenu.removeAttribute("aria-busy");
+    }
+    const iBlocked = !!(otherId && (state.blockedUsers || []).some((user) => user.id === otherId));
+    const menuMode = !otherId || (state.user && otherId === state.user.id) ? "none" : iBlocked ? "unblock" : "block";
+    if (threadPop && threadPop.getAttribute("data-mode") !== menuMode) {
+      threadPop.setAttribute("data-mode", menuMode);
+      const clearItem = '<button class="btn quiet danger" type="button" data-act="clear-chat" role="menuitem">Clear chat</button>';
+      const blockItem = menuMode === "unblock"
+        ? '<button class="btn quiet" type="button" data-act="menu-unblock" role="menuitem">Unblock user</button>'
+        : menuMode === "block"
+          ? '<button class="btn quiet danger" type="button" data-act="menu-block" role="menuitem">Block user</button>'
+          : "";
+      threadPop.innerHTML = clearItem + blockItem;
     }
     if (threadPop) threadPop.hidden = !threadMenuOpen;
     const threadBlock = document.getElementById("thread-block");
@@ -1528,6 +1543,29 @@ export function renderWebview(webview: Webview, state: HostState): string {
         () => vscode.postMessage({ version: 1, type: "clearChat", conversationId: state.activeConversationId }),
         "Clear this chat?"
       );
+      return;
+    }
+    if (act === "menu-block" || act === "menu-unblock") {
+      const openChat = (state.conversations || []).find((item) => item.id === state.activeConversationId);
+      const peerId = openChat && state.user ? (openChat.participantIds || []).find((item) => item !== state.user.id) : "";
+      threadMenuOpen = false;
+      apply(state);
+      if (!peerId || state.busy || (state.user && peerId === state.user.id)) return;
+      if (act === "menu-block") {
+        ask(
+          "They will no longer be able to message you or send you a friend request. This conversation and your friendship stay. Their messages stay here unless you clear the chat.",
+          "Block user",
+          () => vscode.postMessage({ version: 1, type: "blockUser", userId: peerId }),
+          "Block this user?"
+        );
+      } else {
+        ask(
+          "They will be able to message you again if you are still friends. Unblocking does not send a new friend request.",
+          "Unblock user",
+          () => vscode.postMessage({ version: 1, type: "unblockUser", userId: peerId }),
+          "Unblock this user?"
+        );
+      }
       return;
     }
     if (!act || !id) return;

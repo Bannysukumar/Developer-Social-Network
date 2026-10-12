@@ -117,6 +117,11 @@ export class SessionFlow {
     this.historyError = null;
   }
 
+  private contactFromBlockedUser(actorId?: string | null): boolean {
+    if (!actorId) return false;
+    return this.blockedUsers.some((user) => user.id === actorId) || this.hiddenPresence.has(actorId);
+  }
+
   private hiddenByClear(conversationId: string, createdAt?: string): boolean {
     const cutoff = this.historyClearedAt[conversationId];
     return !!cutoff && !!createdAt && createdAt <= cutoff;
@@ -519,6 +524,7 @@ export class SessionFlow {
     const note = notificationFromFrame(frame);
     if (!note) return;
     if (this.notificationsClearedAt && (!note.createdAt || note.createdAt <= this.notificationsClearedAt)) return;
+    if (this.contactFromBlockedUser(note.actorId) && note.type !== "SECURITY" && note.type !== "ACCOUNT") return;
     const viewingThisMessage = note.type === "NEW_MESSAGE" && !!note.referenceId && this.viewingConversation(note.referenceId);
     const incoming = viewingThisMessage && !note.read && !this.confirmedNotificationReads.has(note.id)
       ? { ...note, read: true }
