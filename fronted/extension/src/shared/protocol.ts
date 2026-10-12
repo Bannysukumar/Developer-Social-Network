@@ -259,6 +259,7 @@ export const webviewMessageSchema = z.discriminatedUnion("type", [
     textStyle: z.enum(["plain", "light", "dark"]),
     contentType: z.string().min(1).max(80),
     dataBase64: z.string().min(1).max(12_000_000),
+    openViewer: z.boolean().optional(),
   }).strict(),
   z.object({
     version: z.literal(1),

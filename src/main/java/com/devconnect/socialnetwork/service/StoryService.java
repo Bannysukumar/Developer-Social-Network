@@ -292,10 +292,18 @@ public class StoryService {
     }
 
     private List<StoryEntity> activeOwnedBy(List<String> ownerIds) {
-        return storyRepository.findActiveByOwnerIdIn(ownerIds, clock.instant()).stream()
-                .sorted((left, right) -> left.getCreatedAt().compareTo(right.getCreatedAt()))
-                .limit(20L * Math.max(ownerIds.size(), 1))
-                .toList();
+        Map<String, List<StoryEntity>> grouped = new LinkedHashMap<>();
+        for (StoryEntity story : storyRepository.findActiveByOwnerIdIn(ownerIds, clock.instant())) {
+            grouped.computeIfAbsent(story.getOwnerId(), ignored -> new ArrayList<>()).add(story);
+        }
+        List<StoryEntity> kept = new ArrayList<>();
+        for (List<StoryEntity> owned : grouped.values()) {
+            owned.sort((left, right) -> left.getCreatedAt().compareTo(right.getCreatedAt()));
+            int start = Math.max(0, owned.size() - 30);
+            kept.addAll(owned.subList(start, owned.size()));
+        }
+        kept.sort((left, right) -> left.getCreatedAt().compareTo(right.getCreatedAt()));
+        return kept;
     }
 
     private boolean active(StoryEntity story) {

@@ -94,6 +94,29 @@ class StoryServiceTest {
     }
 
     @Test
+    void aSecondStoryIsStoredSeparatelyAndDoesNotReplaceTheFirst() {
+        byte[] jpeg = new byte[] {(byte) 0xFF, (byte) 0xD8, (byte) 0xFF, (byte) 0xD9};
+        when(reactionRepository.findByStoryIdAndUserId(any(), any())).thenReturn(Optional.empty());
+        when(viewRepository.countByStoryId(any())).thenReturn(0L);
+        when(storyRepository.findByOwnerIdAndClientStoryId(eq(ADA), any())).thenReturn(Optional.empty());
+        when(fileStorageService.storeStory(jpeg)).thenReturn(
+                new FileStorageService.StoredObject("stories/one", jpeg.length),
+                new FileStorageService.StoredObject("stories/two", jpeg.length)
+        );
+        when(storyRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+        when(friendshipService.visibleFriendIds(ADA, 100)).thenReturn(List.of());
+
+        var first = service.publish(ADA, "client-01", "one", "plain", jpeg);
+        var second = service.publish(ADA, "client-02", "two", "dark", jpeg);
+
+        assertThat(first.id()).isNotEqualTo(second.id());
+        assertThat(first.caption()).isEqualTo("one");
+        assertThat(second.caption()).isEqualTo("two");
+        verify(storyRepository, times(2)).save(any());
+        verify(fileStorageService, never()).deleteKey(any());
+    }
+
+    @Test
     void invalidMediaIsRejectedBeforeStorage() {
         assertThatThrownBy(() -> service.publish(ADA, "client-01", "", "plain", "notes".getBytes()))
                 .isInstanceOf(ValidationFailedException.class);

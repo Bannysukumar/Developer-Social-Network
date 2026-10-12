@@ -346,7 +346,13 @@ export function renderWebview(webview: Webview, state: HostState): string {
   .story-progress { display: flex; gap: 3px; }
   .story-progress i { flex: 1; height: 2px; background: color-mix(in srgb, var(--vscode-foreground) 28%, transparent); }
   .story-progress i.on { background: var(--vscode-foreground); }
-  .story-tile:focus-visible, .story-scroll:focus-visible, #story-close:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 2px; }
+  .story-tile:focus-visible, .story-scroll:focus-visible, #story-close:focus-visible, #story-add-more:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 2px; }
+  .story-queue { display: flex; gap: 6px; overflow-x: auto; max-width: 100%; }
+  .story-queue button { width: 52px; height: 52px; padding: 0; border-radius: 8px; overflow: hidden; flex: 0 0 auto; }
+  .story-queue img, .story-queue video { width: 100%; height: 100%; object-fit: cover; }
+  .story-queue .failed { outline: 2px solid var(--vscode-errorForeground); }
+  #story-caption-view.light { background: #fff; color: #111; padding: 4px 8px; border-radius: 6px; }
+  #story-caption-view.dark { background: #111; color: #fff; padding: 4px 8px; border-radius: 6px; }
   @media (prefers-reduced-motion: reduce) { .story-scroller { scroll-behavior: auto; } }
   .menu-pop .btn { width: 100%; justify-content: flex-start; text-align: left; }
   #thread-menu:focus-visible, #clear-notifications:focus-visible, .menu-pop .btn:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 2px; }
@@ -726,54 +732,6 @@ export function renderWebview(webview: Webview, state: HostState): string {
           <input id="file-input" type="file" multiple hidden>
         </form>
         <div id="lightbox" class="lightbox" hidden></div>
-        <section id="story-composer" class="story-overlay" hidden>
-          <form id="story-form" class="story-sheet">
-            <div class="thread-head">
-              <strong>New story</strong>
-              <button class="btn quiet" type="button" id="story-cancel">Cancel</button>
-            </div>
-            <div id="story-preview" class="story-stage muted">Choose a photo or a video up to 15 seconds.</div>
-            <div class="row">
-              <button class="btn" type="button" id="story-pick">Choose media</button>
-              <button class="btn quiet" type="button" id="story-clear-media" hidden>Remove</button>
-            </div>
-            <input id="story-file" type="file" accept="image/jpeg,image/png,image/gif,image/webp,video/mp4,video/webm" hidden>
-            <label>Caption<input id="story-caption" maxlength="160" placeholder="Say something"></label>
-            <div class="row" role="radiogroup" aria-label="Caption style">
-              <label><input type="radio" name="story-style" value="plain" checked> Plain</label>
-              <label><input type="radio" name="story-style" value="light"> Light</label>
-              <label><input type="radio" name="story-style" value="dark"> Dark</label>
-            </div>
-            <p class="muted" id="story-form-error" hidden></p>
-            <button class="btn primary" type="submit" id="story-publish">Share story</button>
-          </form>
-        </section>
-        <section id="story-viewer" class="story-overlay" hidden>
-          <div class="story-sheet story-player" role="dialog" aria-label="Story">
-            <div id="story-progress" class="story-progress"></div>
-            <div class="thread-head">
-              <strong id="story-who"></strong>
-              <span class="muted" id="story-when"></span>
-              <button class="btn quiet" type="button" id="story-close" aria-label="Close story">Close</button>
-            </div>
-            <div id="story-media" class="story-stage"></div>
-            <p id="story-caption-view"></p>
-            <div class="row" id="story-reactions"></div>
-            <form id="story-reply" class="row" hidden>
-              <input id="story-reply-text" maxlength="2000" placeholder="Reply privately" aria-label="Reply to story">
-              <button class="btn" type="submit">Send</button>
-            </form>
-            <div class="row" id="story-owner-tools" hidden>
-              <button class="btn quiet" type="button" id="story-viewers-btn">Viewers</button>
-              <button class="btn quiet danger" type="button" id="story-delete">Delete</button>
-            </div>
-            <div id="story-viewer-list" class="stack" hidden></div>
-            <div class="story-nav">
-              <button class="btn quiet" type="button" id="story-prev" aria-label="Previous story">Previous</button>
-              <button class="btn quiet" type="button" id="story-next" aria-label="Next story">Next</button>
-            </div>
-          </div>
-        </section>
       </div>
     </section>
 
@@ -878,11 +836,64 @@ export function renderWebview(webview: Webview, state: HostState): string {
         <button class="btn quiet" type="button" data-settings="menu">Settings</button>
         <h1>About</h1>
         <p>DevConnect</p>
-        <p class="muted" id="about-version">Version 0.4.58</p>
+        <p class="muted" id="about-version">Version 0.4.59</p>
         <p class="muted">A developer network inside Visual Studio Code. Messages stay encrypted on your devices.</p>
       </div>
     </section>
       </main>
+      <section id="story-composer" class="story-overlay" hidden>
+        <form id="story-form" class="story-sheet">
+          <div class="thread-head">
+            <strong>New story</strong>
+            <button class="btn quiet" type="button" id="story-cancel">Cancel</button>
+          </div>
+          <div id="story-preview" class="story-stage muted">Choose a photo or a video up to 15 seconds.</div>
+          <div id="story-queue" class="story-queue" hidden></div>
+          <p class="muted" id="story-upload-status"></p>
+          <div class="row">
+            <button class="btn" type="button" id="story-pick">Choose media</button>
+            <button class="btn quiet" type="button" id="story-clear-media" hidden>Remove</button>
+          </div>
+          <input id="story-file" type="file" accept="image/jpeg,image/png,image/gif,image/webp,video/mp4,video/webm" multiple hidden>
+          <label>Caption<input id="story-caption" maxlength="160" placeholder="Say something"></label>
+          <div class="row" role="radiogroup" aria-label="Caption style">
+            <label><input type="radio" name="story-style" value="plain" checked> Plain</label>
+            <label><input type="radio" name="story-style" value="light"> Light</label>
+            <label><input type="radio" name="story-style" value="dark"> Dark</label>
+          </div>
+          <p class="muted" id="story-form-error" hidden></p>
+          <button class="btn primary" type="submit" id="story-publish">Share story</button>
+        </form>
+      </section>
+      <section id="story-viewer" class="story-overlay" hidden>
+        <div class="story-sheet story-player" role="dialog" aria-label="Story">
+          <div id="story-progress" class="story-progress"></div>
+          <div class="thread-head">
+            <strong id="story-who"></strong>
+            <span class="muted" id="story-count"></span>
+            <span class="muted" id="story-when"></span>
+            <button class="btn quiet" type="button" id="story-pause" aria-label="Pause story">Pause</button>
+            <button class="btn quiet" type="button" id="story-close" aria-label="Close story">Close</button>
+          </div>
+          <div id="story-media" class="story-stage"></div>
+          <p id="story-caption-view"></p>
+          <div class="row" id="story-reactions"></div>
+          <form id="story-reply" class="row" hidden>
+            <input id="story-reply-text" maxlength="2000" placeholder="Reply privately" aria-label="Reply to story">
+            <button class="btn" type="submit">Send</button>
+          </form>
+          <div class="row" id="story-owner-tools" hidden>
+            <button class="btn" type="button" id="story-add-more">Add to your story</button>
+            <button class="btn quiet" type="button" id="story-viewers-btn">Viewers</button>
+            <button class="btn quiet danger" type="button" id="story-delete">Delete</button>
+          </div>
+          <div id="story-viewer-list" class="stack" hidden></div>
+          <div class="story-nav">
+            <button class="btn quiet" type="button" id="story-prev" aria-label="Previous story">Previous</button>
+            <button class="btn quiet" type="button" id="story-next" aria-label="Next story">Next</button>
+          </div>
+        </div>
+      </section>
   </div>
 </div>
   <div class="dialog-back" id="dialog" hidden>
@@ -1207,16 +1218,28 @@ export function renderWebview(webview: Webview, state: HostState): string {
       }).join("") : '<p class="muted">No documents or files in this chat yet.</p>');
     }
   }
-  let storyFile = null;
+  let storyQueue = [];
+  let storyPreviewId = "";
+  let storyAwait = null;
   let storyTimer = 0;
   let storyPaused = false;
   let storySubmitLock = false;
   const storyEmojis = ["❤️", "😂", "😮", "😢", "🔥", "👍"];
+  function freshStories(list) {
+    const now = Date.now();
+    return (list || []).filter((story) => {
+      const expires = story.expiresAt ? Date.parse(story.expiresAt) : 0;
+      return !expires || expires > now;
+    });
+  }
   function storyPlaylist() {
     const tray = state.storyTray || { mine: [], rings: [] };
-    const items = (tray.mine || []).slice();
-    (tray.rings || []).forEach((ring) => (ring.stories || []).forEach((story) => items.push(story)));
+    const items = freshStories(tray.mine);
+    (tray.rings || []).forEach((ring) => freshStories(ring.stories).forEach((story) => items.push(story)));
     return items;
+  }
+  function storyClientId() {
+    return ("story" + Date.now().toString(36) + Math.random().toString(36).slice(2, 12)).replace(/[^A-Za-z0-9_-]/g, "").slice(0, 64);
   }
   function moveStory(step) {
     const items = storyPlaylist();
@@ -1257,6 +1280,14 @@ export function renderWebview(webview: Webview, state: HostState): string {
     const who = document.getElementById("story-who");
     const person = (state.storyTray && state.storyTray.rings || []).find((ring) => current && ring.user.id === current.ownerId);
     if (who) who.textContent = current && current.mine ? "Your story" : (person && (person.user.displayName || person.user.username)) || "Story";
+    const count = document.getElementById("story-count");
+    const position = ownerStories.findIndex((story) => current && story.id === current.id);
+    if (count) count.textContent = ownerStories.length ? (position + 1) + " of " + ownerStories.length : "";
+    const pause = document.getElementById("story-pause");
+    if (pause) {
+      pause.textContent = storyPaused ? "Resume" : "Pause";
+      pause.setAttribute("aria-label", storyPaused ? "Resume story" : "Pause story");
+    }
     const whenLabel = document.getElementById("story-when");
     if (whenLabel) whenLabel.textContent = current ? when(current.createdAt) : "";
     const caption = document.getElementById("story-caption-view");
@@ -1270,14 +1301,16 @@ export function renderWebview(webview: Webview, state: HostState): string {
     if (media && media.getAttribute("data-story") !== key) {
       media.setAttribute("data-story", key);
       if (!stage || !current || stage.storyId !== current.id) media.innerHTML = '<span class="muted">Loading story…</span>';
-      else if (stage.failed) media.innerHTML = '<span class="muted">This story could not be opened.</span>';
+      else if (stage.failed) media.innerHTML = '<span class="muted">This story has expired or is no longer available.</span>';
       else if (stage.mediaType === "VIDEO") media.innerHTML = '<video src="' + esc(stage.dataUrl) + '" playsinline></video>';
       else media.innerHTML = '<img src="' + esc(stage.dataUrl) + '" alt="' + esc(current.caption || "Story") + '">';
       const video = media.querySelector("video");
       if (video) {
         video.addEventListener("ended", () => { if (!storyPaused) moveStory(1); });
-        const started = video.play();
-        if (started && started.catch) started.catch(() => undefined);
+        if (!storyPaused) {
+          const started = video.play();
+          if (started && started.catch) started.catch(() => undefined);
+        }
       }
     }
     const reply = document.getElementById("story-reply");
@@ -1303,18 +1336,32 @@ export function renderWebview(webview: Webview, state: HostState): string {
     const note = document.getElementById("story-note");
     if (!items || !note) return;
     const tray = state.storyTray || { mine: [], rings: [] };
-    const mine = tray.mine || [];
+    const mine = freshStories(tray.mine);
+    if (storyAwait && !state.busy) {
+      const created = mine.some((story) => !storyAwait.beforeIds[story.id]) || state.notice === "Your story has been shared.";
+      const item = storyQueue.find((entry) => entry.localId === storyAwait.localId);
+      if (item) {
+        item.status = created ? "done" : "failed";
+        item.error = created ? "" : (state.error || "Story upload failed. Retry this item.");
+      }
+      const finish = storyAwait.resolve;
+      storyAwait = null;
+      finish();
+    }
+    const self = state.user;
+    const yourStory = '<button class="story-tile" type="button" data-act="' + (mine.length ? "open-story" : "add-story") + '" data-id="' + esc(self ? self.id : "me") + '" data-story="' + esc(mine[0] ? mine[0].id : "") + '"><span class="story-ring mine"><span class="story-avatar">' + avatarMarkup(self, "md") + (mine.length ? "" : '<span class="story-plus" aria-hidden="true">+</span>') + '</span></span><span class="story-name">Your story</span></button>';
     if (state.storiesLoading && !mine.length && !(tray.rings || []).length) {
-      items.innerHTML = '<div class="story-skel"></div><div class="story-skel"></div><div class="story-skel"></div>';
+      items.innerHTML = yourStory + '<div class="story-skel"></div><div class="story-skel"></div>';
       note.textContent = "";
       paintStoryViewer();
       return;
     }
-    const self = state.user;
-    const tiles = ['<button class="story-tile" type="button" data-act="' + (mine.length ? "open-story" : "add-story") + '" data-id="' + esc(self ? self.id : "me") + '" data-story="' + esc(mine[0] ? mine[0].id : "") + '"><span class="story-ring mine"><span class="story-avatar">' + avatarMarkup(self, "md") + (mine.length ? "" : '<span class="story-plus" aria-hidden="true">+</span>') + '</span></span><span class="story-name">Your story</span></button>'];
+    const tiles = [yourStory];
     if (mine.length) tiles.push('<button class="story-tile" type="button" data-act="add-story" data-id="add-story"><span class="story-ring mine"><span class="story-avatar"><span class="story-plus" aria-hidden="true">+</span></span></span><span class="story-name">Add</span></button>');
     (tray.rings || []).forEach((ring) => {
-      const first = (ring.stories || [])[0];
+      const stories = freshStories(ring.stories);
+      const first = stories[0];
+      if (!first) return;
       const presence = state.presenceByUser && state.presenceByUser[ring.user.id];
       const online = presence && presence.status === "ONLINE" ? '<span class="presence" aria-label="Online"></span>' : "";
       tiles.push('<button class="story-tile" type="button" data-act="open-story" data-id="' + esc(ring.user.id) + '" data-story="' + esc(first ? first.id : "") + '"><span class="story-ring ' + (ring.unseen ? "unseen" : "seen") + '"><span class="story-avatar">' + avatarMarkup(ring.user, "md") + online + '</span></span><span class="story-name">' + esc(ring.user.displayName || ring.user.username) + '</span></button>');
@@ -1336,8 +1383,157 @@ export function renderWebview(webview: Webview, state: HostState): string {
   function openStoryComposer() {
     const composer = document.getElementById("story-composer");
     const error = document.getElementById("story-form-error");
-    if (composer) composer.hidden = false;
+    const note = document.getElementById("story-note");
+    if (!composer) {
+      if (note) note.textContent = "Could not open story composer. Please try again.";
+      return;
+    }
+    composer.hidden = false;
     if (error) { error.hidden = true; error.textContent = ""; }
+    if (state.storyViewer) vscode.postMessage({ version: 1, type: "closeStory" });
+  }
+  function paintStoryQueue() {
+    const box = document.getElementById("story-queue");
+    const remove = document.getElementById("story-clear-media");
+    const preview = document.getElementById("story-preview");
+    const publish = document.getElementById("story-publish");
+    if (box) {
+      box.hidden = storyQueue.length === 0;
+      box.innerHTML = storyQueue.map((item) => '<button type="button" class="' + (item.localId === storyPreviewId ? "on" : "") + (item.status === "failed" ? " failed" : "") + '" data-act="story-preview" data-id="' + esc(item.localId) + '" aria-label="' + esc(item.file.name + ", " + item.status) + '">' + (item.file.type.indexOf("video/") === 0 ? '<video src="' + esc(item.url) + '"></video>' : '<img src="' + esc(item.url) + '" alt="">') + '</button>').join("");
+    }
+    const current = storyQueue.find((item) => item.localId === storyPreviewId) || null;
+    if (remove) remove.hidden = !current;
+    if (preview && current) preview.innerHTML = current.file.type.indexOf("video/") === 0 ? '<video src="' + esc(current.url) + '" controls></video>' : '<img src="' + esc(current.url) + '" alt="Story preview">';
+    else if (preview) preview.textContent = "Choose a photo or a video up to 15 seconds.";
+    const waiting = storyQueue.filter((item) => item.status !== "done").length;
+    if (publish) publish.textContent = waiting > 1 ? "Share " + waiting + " stories" : "Share story";
+  }
+  function discardStoryDraft() {
+    storyQueue.forEach((item) => { if (item.url) URL.revokeObjectURL(item.url); });
+    storyQueue = [];
+    storyPreviewId = "";
+    storySubmitLock = false;
+    const composer = document.getElementById("story-composer");
+    if (composer) composer.hidden = true;
+    paintStoryQueue();
+  }
+  function closeStoryComposer() {
+    if (storySubmitLock) return;
+    if (storyQueue.some((item) => item.status !== "done")) {
+      ask("Discard the media you selected for this story?", "Discard", discardStoryDraft, "Discard this draft?");
+      return;
+    }
+    discardStoryDraft();
+  }
+  async function acceptStoryFiles(files) {
+    const error = document.getElementById("story-form-error");
+    let rejected = "";
+    for (let index = 0; index < files.length; index += 1) {
+      const file = files[index];
+      const allowed = ["image/jpeg", "image/png", "image/gif", "image/webp", "video/mp4", "video/webm"];
+      const video = file.type.indexOf("video/") === 0;
+      const limit = video ? 8388608 : 5242880;
+      if (allowed.indexOf(file.type) < 0) {
+        rejected = "This file type is not supported.";
+        continue;
+      }
+      if (file.size <= 0 || file.size > limit) {
+        rejected = video ? "Videos must be 8 MB or smaller." : "Images must be 5 MB or smaller.";
+        continue;
+      }
+      if (video) {
+        const duration = await new Promise((resolve) => {
+          const url = URL.createObjectURL(file);
+          const probe = document.createElement("video");
+          probe.preload = "metadata";
+          probe.onloadedmetadata = () => { const value = probe.duration; URL.revokeObjectURL(url); resolve(value); };
+          probe.onerror = () => { URL.revokeObjectURL(url); resolve(NaN); };
+          probe.src = url;
+        });
+        if (!(duration > 0) || duration > 15) {
+          rejected = "Videos must be 15 seconds or shorter.";
+          continue;
+        }
+      }
+      const localId = storyClientId();
+      storyQueue.push({ localId: localId, file: file, url: URL.createObjectURL(file), status: "queued", clientStoryId: storyClientId(), error: "" });
+      if (!storyPreviewId) storyPreviewId = localId;
+    }
+    if (error) {
+      error.hidden = !rejected;
+      error.textContent = rejected;
+    }
+    paintStoryQueue();
+  }
+  function readStoryFile(file) {
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const raw = typeof reader.result === "string" ? reader.result : "";
+        resolve(raw.indexOf(",") >= 0 ? raw.split(",")[1] : "");
+      };
+      reader.onerror = () => resolve("");
+      reader.readAsDataURL(file);
+    });
+  }
+  async function shareStoryQueue() {
+    const error = document.getElementById("story-form-error");
+    const status = document.getElementById("story-upload-status");
+    const pending = storyQueue.filter((item) => item.status !== "done");
+    if (!pending.length || storySubmitLock) {
+      if (error && !pending.length) { error.hidden = false; error.textContent = "Choose an image or a short video."; }
+      return;
+    }
+    if (state.busy) {
+      if (error) { error.hidden = false; error.textContent = "Please wait for the current action to finish, then share again."; }
+      return;
+    }
+    storySubmitLock = true;
+    const style = document.querySelector('input[name="story-style"]:checked');
+    const caption = document.getElementById("story-caption");
+    const textStyle = style instanceof HTMLInputElement ? style.value : "plain";
+    const text = caption instanceof HTMLInputElement ? caption.value : "";
+    for (let index = 0; index < pending.length; index += 1) {
+      const item = pending[index];
+      item.status = "uploading";
+      paintStoryQueue();
+      if (status) status.textContent = "Uploading " + (index + 1) + " of " + pending.length + "…";
+      const data = await readStoryFile(item.file);
+      if (!data) {
+        item.status = "failed";
+        item.error = "That file could not be read.";
+        continue;
+      }
+      const before = {};
+      freshStories((state.storyTray && state.storyTray.mine) || []).forEach((story) => { before[story.id] = true; });
+      await new Promise((resolve) => {
+        storyAwait = { localId: item.localId, beforeIds: before, resolve: resolve };
+        vscode.postMessage({
+          version: 1,
+          type: "publishStory",
+          clientStoryId: item.clientStoryId,
+          caption: text,
+          textStyle: textStyle,
+          contentType: item.file.type,
+          dataBase64: data,
+          openViewer: false,
+        });
+      });
+    }
+    storySubmitLock = false;
+    const failed = storyQueue.filter((item) => item.status === "failed");
+    const done = storyQueue.filter((item) => item.status === "done");
+    if (status) status.textContent = failed.length ? "Story upload failed. Retry this item." : (done.length ? "Your story has been shared." : "");
+    if (error && failed.length) {
+      error.hidden = false;
+      error.textContent = failed[0].error || "Story upload failed. Retry this item.";
+    }
+    paintStoryQueue();
+    if (done.length && !failed.length) {
+      const newest = freshStories((state.storyTray && state.storyTray.mine) || []).slice(-1)[0];
+      discardStoryDraft();
+      if (newest) vscode.postMessage({ version: 1, type: "viewStory", storyId: newest.id });
+    }
   }
   function fileSize(size) {
     const value = Number(size) || 0;
@@ -1820,7 +2016,7 @@ export function renderWebview(webview: Webview, state: HostState): string {
       '<div class="card"><strong>' + esc(d.deviceName || d.id) + '</strong><span class="muted">' + esc(d.platform || "") + '</span><button class="btn" data-act="revoke" data-id="' + esc(d.id) + '">Revoke</button></div>'
     ).join("") : '<p class="muted">No devices listed.</p>';
     document.querySelectorAll("button, input, textarea, select").forEach((el) => {
-      if (el.id === "back-btn" || el.id === "thread-back" || el.id === "thread-profile" || el.id === "thread-menu" || el.id === "clear-notifications" || el.id === "send-btn" || el.id === "chat-filter" || el.id === "jump-latest" || el.id === "retry" || el.id === "dialog-ok" || el.id === "dialog-cancel" || el.id === "edit-profile" || el.id === "close-edit" || el.hasAttribute("data-go") || el.hasAttribute("data-toggle") || el.hasAttribute("data-settings") || el.hasAttribute("data-friend-tab") || el.classList.contains("toggle") || el.closest("#lightbox")) return;
+      if (el.id === "back-btn" || el.id === "thread-back" || el.id === "thread-profile" || el.id === "thread-menu" || el.id === "clear-notifications" || el.id === "send-btn" || el.id === "chat-filter" || el.id === "jump-latest" || el.id === "retry" || el.id === "dialog-ok" || el.id === "dialog-cancel" || el.id === "edit-profile" || el.id === "close-edit" || el.hasAttribute("data-go") || el.hasAttribute("data-toggle") || el.hasAttribute("data-settings") || el.hasAttribute("data-friend-tab") || el.classList.contains("toggle") || el.classList.contains("story-tile") || el.classList.contains("story-scroll") || el.closest("#lightbox") || el.closest("#story-composer") || el.closest("#story-viewer")) return;
       el.disabled = !!state.busy;
     });
     document.querySelectorAll(".auth-submit").forEach((btn) => {
@@ -1917,9 +2113,19 @@ export function renderWebview(webview: Webview, state: HostState): string {
       openStoryComposer();
       return;
     }
+    if (act === "story-preview") {
+      storyPreviewId = id || storyPreviewId;
+      paintStoryQueue();
+      return;
+    }
     if (act === "open-story") {
       const storyId = target.getAttribute("data-story") || "";
-      if (storyId) vscode.postMessage({ version: 1, type: "viewStory", storyId: storyId });
+      if (!storyId) {
+        const note = document.getElementById("story-note");
+        if (note) note.textContent = "This story has expired or is no longer available.";
+        return;
+      }
+      vscode.postMessage({ version: 1, type: "viewStory", storyId: storyId });
       return;
     }
     if (act === "react-story") {
@@ -2193,80 +2399,49 @@ export function renderWebview(webview: Webview, state: HostState): string {
       document.getElementById("story-scroller").scrollBy({ left: event.key === "ArrowRight" ? 180 : -180 });
     }
   });
-  document.getElementById("story-cancel").addEventListener("click", () => { document.getElementById("story-composer").hidden = true; });
+  document.getElementById("story-cancel").addEventListener("click", () => closeStoryComposer());
   document.getElementById("story-pick").addEventListener("click", () => document.getElementById("story-file").click());
   document.getElementById("story-clear-media").addEventListener("click", () => {
-    storyFile = null;
-    const preview = document.getElementById("story-preview");
-    if (preview) preview.textContent = "Choose a photo or a video up to 15 seconds.";
-    document.getElementById("story-clear-media").hidden = true;
+    const current = storyQueue.find((item) => item.localId === storyPreviewId);
+    if (!current || storySubmitLock) return;
+    if (current.url) URL.revokeObjectURL(current.url);
+    storyQueue = storyQueue.filter((item) => item.localId !== current.localId);
+    storyPreviewId = storyQueue.length ? storyQueue[0].localId : "";
+    paintStoryQueue();
   });
-  document.getElementById("story-file").addEventListener("change", async (event) => {
+  document.getElementById("story-file").addEventListener("change", (event) => {
     const input = event.target;
-    const file = input instanceof HTMLInputElement && input.files ? input.files[0] : undefined;
+    const files = input instanceof HTMLInputElement && input.files ? Array.prototype.slice.call(input.files) : [];
     if (input instanceof HTMLInputElement) input.value = "";
-    const error = document.getElementById("story-form-error");
-    if (!file) return;
-    const allowed = ["image/jpeg", "image/png", "image/gif", "image/webp", "video/mp4", "video/webm"];
-    const video = file.type.indexOf("video/") === 0;
-    const limit = video ? 8388608 : 5242880;
-    if (allowed.indexOf(file.type) < 0 || file.size <= 0 || file.size > limit) {
-      if (error) { error.hidden = false; error.textContent = "Use a JPEG, PNG, GIF, WebP, MP4, or WebM within the size limit."; }
-      return;
-    }
-    if (video) {
-      const duration = await new Promise((resolve) => {
-        const url = URL.createObjectURL(file);
-        const probe = document.createElement("video");
-        probe.preload = "metadata";
-        probe.onloadedmetadata = () => { const value = probe.duration; URL.revokeObjectURL(url); resolve(value); };
-        probe.onerror = () => { URL.revokeObjectURL(url); resolve(NaN); };
-        probe.src = url;
-      });
-      if (!(duration > 0) || duration > 15) {
-        if (error) { error.hidden = false; error.textContent = "Videos must be 15 seconds or shorter."; }
-        return;
-      }
-    }
-    storyFile = file;
-    if (error) error.hidden = true;
-    const preview = document.getElementById("story-preview");
-    const url = URL.createObjectURL(file);
-    if (preview) preview.innerHTML = video ? '<video src="' + url + '" controls></video>' : '<img src="' + url + '" alt="Story preview">';
-    document.getElementById("story-clear-media").hidden = false;
+    if (files.length) void acceptStoryFiles(files);
   });
   document.getElementById("story-form").addEventListener("submit", (event) => {
     event.preventDefault();
-    const error = document.getElementById("story-form-error");
-    if (!storyFile || storySubmitLock || state.busy) {
-      if (error && !storyFile) { error.hidden = false; error.textContent = "Choose an image or a short video."; }
-      return;
-    }
-    storySubmitLock = true;
-    const style = document.querySelector('input[name="story-style"]:checked');
-    const caption = document.getElementById("story-caption");
-    const reader = new FileReader();
-    reader.onload = () => {
-      const raw = typeof reader.result === "string" ? reader.result : "";
-      const data = raw.indexOf(",") >= 0 ? raw.split(",")[1] : "";
-      const clientStoryId = ("story" + Date.now().toString(36) + Math.random().toString(36).slice(2, 10)).replace(/[^A-Za-z0-9_-]/g, "").slice(0, 64);
-      vscode.postMessage({
-        version: 1,
-        type: "publishStory",
-        clientStoryId: clientStoryId,
-        caption: caption instanceof HTMLInputElement ? caption.value : "",
-        textStyle: style instanceof HTMLInputElement ? style.value : "plain",
-        contentType: storyFile.type,
-        dataBase64: data,
-      });
-    };
-    reader.onerror = () => {
-      storySubmitLock = false;
-      if (error) { error.hidden = false; error.textContent = "That file could not be read."; }
-    };
-    reader.readAsDataURL(storyFile);
+    void shareStoryQueue();
   });
   document.getElementById("story-close").addEventListener("click", () => vscode.postMessage({ version: 1, type: "closeStory" }));
+  document.getElementById("story-pause").addEventListener("click", () => {
+    storyPaused = !storyPaused;
+    const video = document.querySelector("#story-media video");
+    if (video) {
+      if (storyPaused) video.pause();
+      else {
+        const started = video.play();
+        if (started && started.catch) started.catch(() => undefined);
+      }
+    }
+    const pause = document.getElementById("story-pause");
+    if (pause) {
+      pause.textContent = storyPaused ? "Resume" : "Pause";
+      pause.setAttribute("aria-label", storyPaused ? "Resume story" : "Pause story");
+    }
+    if (storyPaused) window.clearTimeout(storyTimer);
+    else armStoryTimer();
+  });
+  document.getElementById("story-add-more").addEventListener("click", (event) => {
+    event.stopPropagation();
+    openStoryComposer();
+  });
   document.getElementById("story-prev").addEventListener("click", () => moveStory(-1));
   document.getElementById("story-next").addEventListener("click", () => moveStory(1));
   document.getElementById("story-media").addEventListener("click", (event) => {
@@ -2385,7 +2560,7 @@ export function renderWebview(webview: Webview, state: HostState): string {
       return;
     }
     if (storyComposer && !storyComposer.hidden) {
-      storyComposer.hidden = true;
+      closeStoryComposer();
       return;
     }
     if (emojiTarget) {

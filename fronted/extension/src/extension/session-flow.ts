@@ -285,7 +285,7 @@ export class SessionFlow {
       ?? this.storyTray.rings.flatMap((ring) => ring.stories).find((story) => story.id === storyId);
   }
 
-  private async publishStory(message: { clientStoryId: string; caption: string; textStyle: "plain" | "light" | "dark"; contentType: string; dataBase64: string }): Promise<void> {
+  private async publishStory(message: { clientStoryId: string; caption: string; textStyle: "plain" | "light" | "dark"; contentType: string; dataBase64: string; openViewer?: boolean }): Promise<void> {
     const bytes = Buffer.from(message.dataBase64, "base64");
     if (!bytes.length) {
       this.error = "Choose an image or a short video.";
@@ -299,15 +299,21 @@ export class SessionFlow {
       bytes,
     });
     this.storyTray = { ...this.storyTray, mine: [...this.storyTray.mine.filter((story) => story.id !== card.id), card] };
-    this.notice = "Story published.";
+    this.notice = "Your story has been shared.";
+    if (message.openViewer === false) return;
     this.storyViewer = { ownerId: card.ownerId, storyId: card.id };
     await this.loadStoryStage(card);
   }
 
   private async viewStory(storyId: string): Promise<void> {
     const known = this.storyById(storyId);
-    const ownerId = known?.ownerId ?? this.storyViewer?.ownerId ?? "";
-    if (!ownerId) return;
+    if (!known || (known.expiresAt && Date.parse(known.expiresAt) <= Date.now())) {
+      if (known) this.dropStory(storyId);
+      this.storyViewer = null;
+      this.storiesError = "This story has expired or is no longer available.";
+      return;
+    }
+    const ownerId = known.ownerId;
     this.storyViewer = { ownerId, storyId };
     this.storyViewers = [];
     if (known) await this.loadStoryStage(known);
