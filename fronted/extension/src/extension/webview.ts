@@ -13,7 +13,7 @@ import type { HostMessage } from "../shared/protocol";
 import type { DisplayMessage } from "./auth-service";
 import { chatActivity } from "./presence-state";
 import { attachmentCaption, fileKind, fileTypeLabel } from "./attachment-layout";
-import { GIFS, QUICK_REACTIONS, STICKERS } from "./media-catalog";
+import { EMOJI_CATEGORIES, GIFS, QUICK_REACTIONS, STICKERS } from "./media-catalog";
 import { dateSeparatorLabel, shouldLoadOlderHistory } from "./date-label";
 import { TYPING_IDLE_MS, typingCommand } from "./typing-debounce";
 
@@ -197,7 +197,7 @@ export function renderWebview(webview: Webview, state: HostState): string {
   .banner { padding: 8px 10px; border-radius: 6px; font-size: 12px; }
   .banner.error { color: var(--vscode-errorForeground); background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent); }
   .banner.notice { background: color-mix(in srgb, var(--vscode-focusBorder) 14%, transparent); }
-  .msg { max-width: 78%; align-self: flex-start; padding: 8px 10px; border-radius: 10px; background: color-mix(in srgb, var(--vscode-foreground) 8%, transparent); white-space: pre-wrap; word-break: break-word; box-sizing: border-box; }
+  .msg { position: relative; max-width: 78%; align-self: flex-start; padding: 8px 10px; border-radius: 10px; background: color-mix(in srgb, var(--vscode-foreground) 8%, transparent); white-space: pre-wrap; word-break: break-word; box-sizing: border-box; }
   .msg.media { width: max-content; max-width: min(320px, 100%); padding: 4px; }
   .msg.media:has(.video-stage) { width: min(320px, 100%); }
   .msg.sealed { font-style: italic; opacity: 0.85; }
@@ -259,6 +259,7 @@ export function renderWebview(webview: Webview, state: HostState): string {
     @keyframes gif-slide { 50% { transform: translateX(18px); } }
     .image-bubble.loading::after { animation: shimmer 1.2s ease-in-out infinite; }
     .upload-bar::before { animation: upload-slide 1s linear infinite; }
+    .react-bar, .emoji-picker { transition: opacity 120ms linear; }
     @keyframes image-in { from { opacity: 0; } to { opacity: 1; } }
     @keyframes shimmer { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
     @keyframes upload-slide { from { transform: translateX(-120%); } to { transform: translateX(280%); } }
@@ -317,9 +318,22 @@ export function renderWebview(webview: Webview, state: HostState): string {
   .motion.spin i { border-radius: 4px; }
   .motion.slide i { width: 36px; height: 18px; border-radius: 9px; }
   .react-row { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; max-width: 100%; }
-  .react-chip { min-height: 22px; padding: 0 6px; border-radius: 11px; }
-  .react-chip.mine { border-color: var(--vscode-focusBorder); }
-  .react-pop, .media-picker { display: grid; gap: 8px; padding: 8px; border: 1px solid var(--vscode-panel-border); border-radius: 10px; background: var(--vscode-editorWidget-background, var(--vscode-editor-background)); }
+  .react-chip { min-height: 22px; padding: 0 6px; border-radius: 11px; font-size: 12px; }
+  .react-chip.mine { border-color: var(--vscode-focusBorder); background: color-mix(in srgb, var(--vscode-focusBorder) 18%, transparent); }
+  .react-bar { display: none; position: absolute; top: 0; left: calc(100% + 6px); z-index: 6; flex-direction: row; gap: 2px; padding: 3px; border-radius: 16px; border: 1px solid var(--vscode-panel-border); background: var(--vscode-editorWidget-background, var(--vscode-editor-background)); }
+  .msg.mine .react-bar { left: auto; right: calc(100% + 6px); }
+  .msg:hover .react-bar, .msg:focus-within .react-bar, .msg.react-open .react-bar { display: flex; }
+  .react-bar .btn { width: 28px; min-width: 28px; height: 28px; min-height: 28px; padding: 0; border-radius: 14px; }
+  @container (max-width: 560px) {
+    .react-bar, .msg.mine .react-bar { top: auto; bottom: calc(100% + 4px); left: 0; right: auto; }
+    .msg.mine .react-bar { left: auto; right: 0; }
+  }
+  .emoji-picker { position: fixed; z-index: 40; width: min(280px, calc(100vw - 16px)); max-height: 240px; display: grid; grid-template-rows: auto auto minmax(0, 1fr); gap: 6px; padding: 8px; border-radius: 12px; border: 1px solid var(--vscode-panel-border); background: var(--vscode-editorWidget-background, var(--vscode-editor-background)); box-sizing: border-box; }
+  .emoji-cats { display: flex; gap: 4px; overflow-x: auto; }
+  .emoji-cats .btn { min-width: 28px; padding: 0 6px; }
+  .emoji-grid { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 2px; overflow: auto; }
+  .emoji-grid .btn { width: 100%; min-height: 28px; padding: 0; }
+  .media-picker { display: grid; gap: 8px; padding: 8px; border: 1px solid var(--vscode-panel-border); border-radius: 10px; background: var(--vscode-editorWidget-background, var(--vscode-editor-background)); }
   .media-picker { max-height: 240px; overflow: auto; }
   .media-grid { display: flex; flex-wrap: wrap; gap: 6px; }
   .media-grid .btn { width: 72px; height: 72px; padding: 4px; }
@@ -575,6 +589,11 @@ export function renderWebview(webview: Webview, state: HostState): string {
         </div>
         <p class="muted" id="thread-connection" hidden>Reconnecting...</p>
         <div id="message-list"></div>
+        <div id="emoji-picker" class="emoji-picker" role="dialog" aria-label="Choose an emoji" hidden>
+          <input id="emoji-search" type="search" maxlength="32" placeholder="Search emoji" aria-label="Search emoji" autocomplete="off">
+          <div id="emoji-cats" class="emoji-cats"></div>
+          <div id="emoji-grid" class="emoji-grid"></div>
+        </div>
         <button class="btn" type="button" id="jump-latest" hidden>↓ New messages</button>
         <p class="muted" id="thread-block" hidden>You blocked this user.</p>
         <form id="message-form" class="composer">
@@ -709,7 +728,7 @@ export function renderWebview(webview: Webview, state: HostState): string {
         <button class="btn quiet" type="button" data-settings="menu">Settings</button>
         <h1>About</h1>
         <p>DevConnect</p>
-        <p class="muted" id="about-version">Version 0.4.52</p>
+        <p class="muted" id="about-version">Version 0.4.53</p>
         <p class="muted">A developer network inside Visual Studio Code. Messages stay encrypted on your devices.</p>
       </div>
     </section>
@@ -794,9 +813,62 @@ export function renderWebview(webview: Webview, state: HostState): string {
   const stickerCatalog = ${JSON.stringify(STICKERS)};
   const gifCatalog = ${JSON.stringify(GIFS)};
   const quickReactions = ${JSON.stringify(QUICK_REACTIONS)};
+  const emojiCatalog = ${JSON.stringify(EMOJI_CATEGORIES)};
+  function placePicker(anchor, picker, view) {
+    const margin = 8;
+    let top = anchor.top - picker.height - margin;
+    if (top < margin) top = anchor.bottom + margin;
+    if (top + picker.height > view.height - margin) top = Math.max(margin, view.height - picker.height - margin);
+    let left = anchor.left;
+    if (left + picker.width > view.width - margin) left = view.width - picker.width - margin;
+    if (left < margin) left = margin;
+    return { top: top, left: left };
+  }
   let pickerTab = "";
   let gifQuery = "";
   let reactFor = "";
+  let emojiTarget = "";
+  let emojiCategory = "Smileys";
+  let emojiQuery = "";
+  let recentEmoji = [];
+  function closeEmojiPicker() {
+    emojiTarget = "";
+    const picker = document.getElementById("emoji-picker");
+    if (picker) picker.hidden = true;
+  }
+  function paintEmojiPicker() {
+    const picker = document.getElementById("emoji-picker");
+    const cats = document.getElementById("emoji-cats");
+    const grid = document.getElementById("emoji-grid");
+    if (!picker || !cats || !grid) return;
+    picker.hidden = !emojiTarget;
+    const needle = emojiQuery.trim().toLowerCase();
+    const recent = !needle && recentEmoji.length ? recentEmoji.map((emoji) => ({ emoji: emoji, name: "recent" })) : [];
+    const source = needle
+      ? emojiCatalog.reduce((all, category) => all.concat(category.items), [])
+      : ((emojiCatalog.find((category) => category.id === emojiCategory) || emojiCatalog[0] || { items: [] }).items);
+    const items = needle ? source.filter((item) => item.name.indexOf(needle) >= 0 || item.emoji === needle) : recent.concat(source);
+    cats.innerHTML = emojiCatalog.map((category) => '<button class="btn" type="button" data-act="emoji-cat" data-id="' + esc(category.id) + '" aria-pressed="' + (category.id === emojiCategory ? "true" : "false") + '" aria-label="' + esc(category.id) + '">' + esc(category.id.slice(0, 1)) + '</button>').join("");
+    grid.innerHTML = items.length
+      ? items.map((item) => '<button class="btn" type="button" data-act="emoji-pick" data-id="' + esc(emojiTarget) + '" data-emoji="' + esc(item.emoji) + '" aria-label="' + esc(item.name) + '">' + item.emoji + '</button>').join("")
+      : '<p class="muted">No emoji match.</p>';
+  }
+  function openEmojiPicker(messageId, anchor) {
+    emojiTarget = messageId;
+    paintEmojiPicker();
+    const picker = document.getElementById("emoji-picker");
+    if (!picker || !anchor) return;
+    const rect = anchor.getBoundingClientRect();
+    const spot = placePicker(
+      { top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right },
+      { width: Math.min(280, window.innerWidth - 16), height: 240 },
+      { width: window.innerWidth, height: window.innerHeight }
+    );
+    picker.style.top = spot.top + "px";
+    picker.style.left = spot.left + "px";
+    const search = document.getElementById("emoji-search");
+    if (search) search.focus();
+  }
   const shouldLoadOlderHistory = ${shouldLoadOlderHistory.toString()};
   let olderRequestArmed = true;
   let olderScrollReady = false;
@@ -1114,7 +1186,7 @@ export function renderWebview(webview: Webview, state: HostState): string {
         ? '<button class="btn quiet icon-btn" type="button" data-act="message-menu" data-id="' + esc(m.id) + '" aria-label="Message actions">⋯</button>'
         : "";
       const menu = openMenuId === m.id
-        ? '<div class="msg-menu">' + (mine && !deleted ? '<button class="btn danger" type="button" data-act="delete-everyone" data-id="' + esc(m.id) + '">Delete for everyone</button>' : "") + '<button class="btn" type="button" data-act="delete-me" data-id="' + esc(m.id) + '">Delete for me</button></div>'
+        ? '<div class="msg-menu">' + (!deleted ? '<button class="btn" type="button" data-act="react-menu" data-id="' + esc(m.id) + '">React</button>' : "") + (mine && !deleted ? '<button class="btn danger" type="button" data-act="delete-everyone" data-id="' + esc(m.id) + '">Delete for everyone</button>' : "") + '<button class="btn" type="button" data-act="delete-me" data-id="' + esc(m.id) + '">Delete for me</button></div>'
         : "";
       const attachmentNames = (m.attachments || []).map((file) => file.name || "");
       const files = (m.attachments || []).map((file) => {
@@ -1163,18 +1235,17 @@ export function renderWebview(webview: Webview, state: HostState): string {
       const selfId = state.user ? state.user.id : "";
       const reactButtons = Object.keys(groups).map((emoji) => {
         const users = groups[emoji];
-        const mine = users.indexOf(selfId) >= 0;
+        const mineReaction = users.indexOf(selfId) >= 0;
         const names = users.map((id) => id === selfId ? "You" : "Friend").join(", ");
-        return '<button class="btn react-chip' + (mine ? " mine" : "") + '" type="button" data-act="react" data-id="' + esc(m.id) + '" data-emoji="' + esc(emoji) + '" title="' + esc(names) + '" aria-label="' + esc(emoji + " " + users.length + (mine ? ", including you" : "")) + '">' + emoji + " " + users.length + '</button>';
+        const label = users.length > 1 ? emoji + " " + users.length : emoji;
+        return '<button class="btn react-chip' + (mineReaction ? " mine" : "") + '" type="button" data-act="react" data-id="' + esc(m.id) + '" data-emoji="' + esc(emoji) + '" title="' + esc(names) + '" aria-label="' + esc(label + (mineReaction ? ", your reaction" : "")) + '">' + label + '</button>';
       }).join("");
-      const reactPop = reactFor === m.id
-        ? '<div class="react-pop">' + quickReactions.map((emoji) => '<button class="btn' + ((groups[emoji] || []).indexOf(selfId) >= 0 ? " mine" : "") + '" type="button" data-act="react" data-id="' + esc(m.id) + '" data-emoji="' + esc(emoji) + '" aria-label="React with ' + esc(emoji) + '">' + emoji + '</button>').join("") + '</div>'
-        : "";
-      const reactToggle = !deleted && m.id && String(m.id).indexOf("local-") !== 0
-        ? '<button class="btn quiet icon-btn" type="button" data-act="react-menu" data-id="' + esc(m.id) + '" aria-label="Add reaction">＋</button>'
+      const canReact = !deleted && m.id && String(m.id).indexOf("local-") !== 0;
+      const reactBar = canReact
+        ? '<div class="react-bar" role="toolbar" aria-label="Quick reactions">' + quickReactions.map((emoji) => '<button class="btn' + ((groups[emoji] || []).indexOf(selfId) >= 0 ? " mine" : "") + '" type="button" data-act="react" data-id="' + esc(m.id) + '" data-emoji="' + esc(emoji) + '" aria-label="React with ' + esc(emoji) + '">' + emoji + '</button>').join("") + '<button class="btn" type="button" data-act="emoji-picker" data-id="' + esc(m.id) + '" aria-label="More emoji">☺</button></div>'
         : "";
       const media = !deleted && ((m.attachments || []).length || m.media) ? " media" : "";
-      return separator + '<div class="msg ' + (mine ? "mine" : "theirs") + (failed ? " failed" : "") + (deleted ? " deleted" : "") + (m.sealed ? " sealed" : "") + media + '">' + (deleted ? "" : visual + files) + shownBody + '<div class="react-row">' + reactButtons + reactToggle + '</div>' + reactPop + '<div class="msg-meta">' + esc(clock(m.createdAt)) + receipt + actions + '</div>' + menu + (failed ? '<div class="msg-meta">' + esc(m.sendError || "Message failed to send.") + '</div>' + retryFiles : "") + '</div>';
+      return separator + '<div class="msg ' + (mine ? "mine" : "theirs") + (failed ? " failed" : "") + (deleted ? " deleted" : "") + (m.sealed ? " sealed" : "") + (reactFor === m.id ? " react-open" : "") + media + '">' + reactBar + (deleted ? "" : visual + files) + shownBody + (reactButtons ? '<div class="react-row">' + reactButtons + '</div>' : "") + '<div class="msg-meta">' + esc(clock(m.createdAt)) + receipt + actions + '</div>' + menu + (failed ? '<div class="msg-meta">' + esc(m.sendError || "Message failed to send.") + '</div>' + retryFiles : "") + '</div>';
       } catch (ignored) {
         return '<div class="msg">' + esc(m && m.displayText ? m.displayText : "Message") + '</div>';
       }
@@ -1340,6 +1411,11 @@ export function renderWebview(webview: Webview, state: HostState): string {
   }
   document.body.addEventListener("click", (event) => {
     const raw = event.target instanceof Element ? event.target : null;
+    if (emojiTarget && raw && !raw.closest("#emoji-picker") && !raw.closest("[data-act='emoji-picker']")) closeEmojiPicker();
+    if (reactFor && raw && !raw.closest(".react-open") && !raw.closest("#emoji-picker") && !raw.closest("[data-act='react-menu']")) {
+      reactFor = "";
+      apply(state);
+    }
     if (attachMenuOpen && (!raw || !raw.closest(".attach-wrap"))) {
       attachMenuOpen = false;
       const menu = document.getElementById("attach-menu");
@@ -1388,8 +1464,35 @@ export function renderWebview(webview: Webview, state: HostState): string {
       }
       return;
     }
+    if (act === "emoji-cat") {
+      emojiCategory = id;
+      emojiQuery = "";
+      const search = document.getElementById("emoji-search");
+      if (search instanceof HTMLInputElement) search.value = "";
+      paintEmojiPicker();
+      return;
+    }
     if (act === "react-menu") {
+      openMenuId = "";
       reactFor = reactFor === id ? "" : id;
+      if (!reactFor) closeEmojiPicker();
+      apply(state);
+      const opened = document.querySelector(".msg.react-open .react-bar button");
+      if (opened instanceof HTMLElement) opened.focus();
+      return;
+    }
+    if (act === "emoji-picker") {
+      if (emojiTarget === id) closeEmojiPicker();
+      else openEmojiPicker(id, target);
+      return;
+    }
+    if (act === "emoji-pick") {
+      const picked = target.getAttribute("data-emoji") || "";
+      if (!picked || state.busy) return;
+      recentEmoji = [picked].concat(recentEmoji.filter((item) => item !== picked)).slice(0, 8);
+      vscode.postMessage({ version: 1, type: "setReaction", messageId: id, emoji: picked });
+      closeEmojiPicker();
+      reactFor = "";
       apply(state);
       return;
     }
@@ -1401,6 +1504,8 @@ export function renderWebview(webview: Webview, state: HostState): string {
         ? { version: 1, type: "clearReaction", messageId: id }
         : { version: 1, type: "setReaction", messageId: id, emoji: emoji });
       reactFor = "";
+      closeEmojiPicker();
+      apply(state);
       return;
     }
     if (state.busy && act !== "open-preview" && act !== "save-attachment" && act !== "reload-image" && act !== "retry-files" && act !== "close-preview") return;
@@ -1562,6 +1667,12 @@ export function renderWebview(webview: Webview, state: HostState): string {
   document.getElementById("dialog-ok").addEventListener("click", () => { const action = dialogAction; closeDialog(); if (action) action(); });
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
+    if (emojiTarget) {
+      closeEmojiPicker();
+      reactFor = "";
+      apply(state);
+      return;
+    }
     const box = document.getElementById("lightbox");
     if (box && !box.hidden) {
       box.hidden = true;
@@ -1664,6 +1775,21 @@ export function renderWebview(webview: Webview, state: HostState): string {
   document.getElementById("gif-query").addEventListener("input", (event) => {
     gifQuery = event.target && event.target.value ? event.target.value : "";
     paintPicker();
+  });
+  document.getElementById("emoji-search").addEventListener("input", (event) => {
+    emojiQuery = event.target && event.target.value ? event.target.value : "";
+    paintEmojiPicker();
+  });
+  document.getElementById("emoji-picker").addEventListener("keydown", (event) => {
+    const keys = ["ArrowRight", "ArrowLeft", "ArrowDown", "ArrowUp"];
+    if (keys.indexOf(event.key) < 0) return;
+    const buttons = Array.prototype.slice.call(document.querySelectorAll("#emoji-grid button"));
+    const index = buttons.indexOf(document.activeElement);
+    if (index < 0) return;
+    event.preventDefault();
+    const step = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : event.key === "ArrowDown" ? 8 : -8;
+    const next = buttons[Math.max(0, Math.min(buttons.length - 1, index + step))];
+    if (next) next.focus();
   });
   document.getElementById("message-form").addEventListener("submit", (e) => {
     e.preventDefault();

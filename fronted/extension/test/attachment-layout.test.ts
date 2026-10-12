@@ -20,7 +20,7 @@ describe("attachment layout", () => {
 
   test("the chat stylesheet keeps media bubbles compact and text bubbles unchanged", () => {
     const html = renderWebview({ cspSource: "https://example.invalid" } as never, emptyHostState());
-    expect(html).toContain(".msg { max-width: 78%");
+    expect(html).toContain(".msg { position: relative; max-width: 78%");
     expect(html).toContain(".msg.media { width: max-content; max-width: min(320px, 100%)");
     expect(html).toContain("object-fit: contain");
     expect(html).toContain("max-height: 240px");

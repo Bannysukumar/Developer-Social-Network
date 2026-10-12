@@ -54,6 +54,7 @@ export class SessionFlow {
   private presenceByUser: Record<string, { status: "ONLINE" | "OFFLINE"; lastSeenAt?: string | null }> = {};
   private typing: HostState["typing"] = null;
   private typingTimer: ReturnType<typeof setTimeout> | undefined;
+  private reactionPending = new Set<string>();
   private readInflight = new Set<string>();
   private readAgain = new Set<string>();
   private confirmedNotificationReads = new Set<string>();
@@ -1028,12 +1029,13 @@ export class SessionFlow {
         case "setReaction":
         case "clearReaction": {
           const current = this.messages.find((item) => item.id === message.messageId);
-          if (!current) break;
+          if (!current || this.reactionPending.has(current.id)) break;
           const selfId = this.auth.getUser()?.id;
           if (!selfId) break;
           const previous = current.reactions ?? [];
           const emoji = message.type === "setReaction" ? message.emoji : null;
           const next = applyUserReaction(previous, selfId, emoji);
+          this.reactionPending.add(current.id);
           this.messages = this.messages.map((item) => item.id === current.id ? { ...item, reactions: next } : item);
           this.pushState();
           try {
@@ -1044,6 +1046,8 @@ export class SessionFlow {
           } catch (error) {
             this.messages = this.messages.map((item) => item.id === current.id ? { ...item, reactions: previous } : item);
             this.error = this.auth.userFacingError(error);
+          } finally {
+            this.reactionPending.delete(current.id);
           }
           break;
         }

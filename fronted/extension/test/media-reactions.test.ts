@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { encodeMediaPayload, parseMediaPayload } from "../src/extension/crypto/media-payload";
-import { searchGifs, stickerById } from "../src/extension/media-catalog";
-import { applyUserReaction, summarizeReactions } from "../src/extension/reaction-state";
+import { ALLOWED_REACTIONS, searchEmoji, searchGifs, stickerById } from "../src/extension/media-catalog";
+import { applyUserReaction, placePicker, summarizeReactions } from "../src/extension/reaction-state";
 import { emptyHostState, renderWebview } from "../src/extension/webview";
 
 describe("stickers, GIFs, and reactions", () => {
@@ -35,8 +35,24 @@ describe("stickers, GIFs, and reactions", () => {
     expect(html).toContain('aria-label="Stickers"');
     expect(html).toContain('aria-label="GIFs"');
     expect(html).toContain("GIF search stays on this device");
-    expect(html).toContain("react-row");
+    expect(html).toContain("react-bar");
+    expect(html).toContain('aria-label="Choose an emoji"');
+    expect(html).toContain(".react-bar { display: none; position: absolute;");
+    expect(html).toContain("max-height: 240px");
+    expect(html).toContain(">React</button>");
+    expect(html).not.toContain('aria-label="Add reaction"');
+    expect(html).not.toContain("react-pop");
     expect(html).not.toContain("giphy");
     expect(html).not.toContain("tenor");
+  });
+
+  test("emoji search is local and the picker stays inside the view", () => {
+    expect(searchEmoji("cat").map((item) => item.emoji)).toEqual(["🐱"]);
+    expect(ALLOWED_REACTIONS.every((emoji) => emoji.length <= 8)).toBe(true);
+    expect(searchEmoji("", "Food").some((item) => item.emoji === "☕")).toBe(true);
+    expect(placePicker({ top: 20, bottom: 48, left: 400, right: 430 }, { width: 280, height: 240 }, { width: 420, height: 300 }))
+      .toEqual({ top: 52, left: 132 });
+    expect(placePicker({ top: 400, bottom: 430, left: 12, right: 40 }, { width: 280, height: 240 }, { width: 800, height: 500 }).top)
+      .toBe(152);
   });
 });

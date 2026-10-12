@@ -1,6 +1,57 @@
 export const QUICK_REACTIONS = ["👍", "❤️", "😂", "😮", "😢", "🙏"] as const;
 
-export const ALLOWED_REACTIONS = [...QUICK_REACTIONS, "🔥", "🎉", "👀", "💯"] as const;
+export interface EmojiChoice {
+  readonly emoji: string;
+  readonly name: string;
+}
+
+export const EMOJI_CATEGORIES: readonly { id: string; items: readonly EmojiChoice[] }[] = [
+  { id: "Smileys", items: [
+    { emoji: "😀", name: "grin" }, { emoji: "😁", name: "beaming" }, { emoji: "😂", name: "joy" }, { emoji: "🤣", name: "rofl" },
+    { emoji: "😊", name: "smile" }, { emoji: "😍", name: "heart eyes" }, { emoji: "😘", name: "kiss" }, { emoji: "😎", name: "cool" },
+    { emoji: "🤔", name: "think" }, { emoji: "😮", name: "surprised" }, { emoji: "😢", name: "cry" }, { emoji: "😭", name: "sob" },
+    { emoji: "😡", name: "angry" }, { emoji: "😴", name: "sleep" }, { emoji: "🤯", name: "mind blown" }, { emoji: "🙏", name: "please" },
+  ] },
+  { id: "People", items: [
+    { emoji: "👍", name: "thumbs up" }, { emoji: "👎", name: "thumbs down" }, { emoji: "👏", name: "clap" }, { emoji: "🙌", name: "raised hands" },
+    { emoji: "🤝", name: "handshake" }, { emoji: "👋", name: "wave" }, { emoji: "✌️", name: "victory" }, { emoji: "🤞", name: "fingers crossed" },
+  ] },
+  { id: "Animals", items: [
+    { emoji: "🐶", name: "dog" }, { emoji: "🐱", name: "cat" }, { emoji: "🐻", name: "bear" }, { emoji: "🐼", name: "panda" },
+    { emoji: "🦊", name: "fox" }, { emoji: "🐸", name: "frog" }, { emoji: "🐵", name: "monkey" }, { emoji: "🦄", name: "unicorn" },
+  ] },
+  { id: "Food", items: [
+    { emoji: "🍎", name: "apple" }, { emoji: "🍕", name: "pizza" }, { emoji: "🍔", name: "burger" }, { emoji: "☕", name: "coffee" },
+    { emoji: "🍩", name: "donut" }, { emoji: "🍪", name: "cookie" }, { emoji: "🥗", name: "salad" }, { emoji: "🍜", name: "noodles" },
+  ] },
+  { id: "Activities", items: [
+    { emoji: "⚽", name: "soccer" }, { emoji: "🏀", name: "basketball" }, { emoji: "🎮", name: "game" }, { emoji: "🎯", name: "target" },
+    { emoji: "🎵", name: "music" }, { emoji: "🎸", name: "guitar" }, { emoji: "🏆", name: "trophy" }, { emoji: "🎨", name: "art" },
+  ] },
+  { id: "Travel", items: [
+    { emoji: "🚗", name: "car" }, { emoji: "✈️", name: "airplane" }, { emoji: "🚀", name: "rocket" }, { emoji: "🚲", name: "bicycle" },
+    { emoji: "⛵", name: "boat" }, { emoji: "🏠", name: "home" }, { emoji: "🗺️", name: "map" }, { emoji: "⛰️", name: "mountain" },
+  ] },
+  { id: "Objects", items: [
+    { emoji: "💻", name: "laptop" }, { emoji: "⌨️", name: "keyboard" }, { emoji: "📱", name: "phone" }, { emoji: "💡", name: "idea" },
+    { emoji: "📌", name: "pin" }, { emoji: "📚", name: "books" }, { emoji: "🔧", name: "wrench" }, { emoji: "📦", name: "package" },
+  ] },
+  { id: "Symbols", items: [
+    { emoji: "❤️", name: "heart" }, { emoji: "🔥", name: "fire" }, { emoji: "✨", name: "sparkles" }, { emoji: "💯", name: "hundred" },
+    { emoji: "✅", name: "check" }, { emoji: "⭐", name: "star" }, { emoji: "🎉", name: "party" }, { emoji: "👀", name: "eyes" },
+  ] },
+];
+
+export const ALLOWED_REACTIONS: readonly string[] = EMOJI_CATEGORIES.flatMap((category) => category.items.map((item) => item.emoji));
+
+export function searchEmoji(query: string, categoryId?: string): readonly EmojiChoice[] {
+  const needle = query.trim().toLowerCase();
+  const source = categoryId && !needle
+    ? EMOJI_CATEGORIES.find((category) => category.id === categoryId)?.items ?? []
+    : EMOJI_CATEGORIES.flatMap((category) => [...category.items]);
+  if (!needle) return source;
+  return source.filter((item) => item.name.includes(needle) || item.emoji === needle);
+}
 
 export interface StickerDef {
   readonly id: string;

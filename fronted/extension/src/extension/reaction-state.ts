@@ -17,6 +17,21 @@ export function applyUserReaction(items: readonly ReactionMark[] | undefined, us
   return [...rest, { userId, emoji }];
 }
 
+export function placePicker(
+  anchor: { readonly top: number; readonly bottom: number; readonly left: number; readonly right: number },
+  picker: { readonly width: number; readonly height: number },
+  view: { readonly width: number; readonly height: number },
+): { top: number; left: number } {
+  const margin = 8;
+  let top = anchor.top - picker.height - margin;
+  if (top < margin) top = anchor.bottom + margin;
+  if (top + picker.height > view.height - margin) top = Math.max(margin, view.height - picker.height - margin);
+  let left = anchor.left;
+  if (left + picker.width > view.width - margin) left = view.width - picker.width - margin;
+  if (left < margin) left = margin;
+  return { top, left };
+}
+
 export function summarizeReactions(items: readonly ReactionMark[], selfId: string | null): ReactionSummary[] {
   const groups = new Map<string, string[]>();
   for (const item of items) {

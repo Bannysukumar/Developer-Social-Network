@@ -26,7 +26,16 @@ import java.util.Set;
 @Service
 public class ReactionService {
 
-    static final Set<String> ALLOWED = Set.of("👍", "❤️", "😂", "😮", "😢", "🙏", "🔥", "🎉", "👀", "💯");
+    static final Set<String> ALLOWED = Set.of(
+            "😀", "😁", "😂", "🤣", "😊", "😍", "😘", "😎", "🤔", "😮", "😢", "😭", "😡", "😴", "🤯", "🙏",
+            "👍", "👎", "👏", "🙌", "🤝", "👋", "✌️", "🤞",
+            "🐶", "🐱", "🐻", "🐼", "🦊", "🐸", "🐵", "🦄",
+            "🍎", "🍕", "🍔", "☕", "🍩", "🍪", "🥗", "🍜",
+            "⚽", "🏀", "🎮", "🎯", "🎵", "🎸", "🏆", "🎨",
+            "🚗", "✈️", "🚀", "🚲", "⛵", "🏠", "🗺️", "⛰️",
+            "💻", "⌨️", "📱", "💡", "📌", "📚", "🔧", "📦",
+            "❤️", "🔥", "✨", "💯", "✅", "⭐", "🎉", "👀"
+    );
 
     private final MessageRepository messageRepository;
     private final MessageReactionRepository reactionRepository;
