@@ -141,6 +141,14 @@ export class ConversationsApi {
     );
   }
 
+  clearHistory(conversationId: string): Promise<{ conversationId: string; clearedAt: string }> {
+    return this.client.request(
+      `conversations/${pathId(conversationId)}/clear`,
+      z.object({ conversationId: z.string().min(1), clearedAt: z.string().min(1) }).strict(),
+      { method: "POST" },
+    );
+  }
+
   deleteMessage(messageId: string, scope: "me" | "everyone" = "me"): Promise<MessageDto> {
     return this.client.request(`messages/${pathId(messageId)}`, messageSchema, {
       method: "DELETE",

@@ -5,6 +5,7 @@ import com.devconnect.socialnetwork.entity.NotificationEntity;
 import com.devconnect.socialnetwork.exception.ResourceNotFoundException;
 import com.devconnect.socialnetwork.repository.NotificationRepository;
 import com.devconnect.socialnetwork.websocket.RealtimePublisher;
+import com.mongodb.client.result.DeleteResult;
 import com.mongodb.client.result.UpdateResult;
 import org.bson.BsonObjectId;
 import org.junit.jupiter.api.BeforeEach;
@@ -125,6 +126,34 @@ class NotificationServiceTest {
         assertThat(rendered).contains("conversation-1");
         assertThat(rendered).contains("NEW_MESSAGE");
         assertThat(rendered).doesNotContain("FRIEND_REQUEST");
+    }
+
+    @Test
+    void clearAllDeletesOnlyTheAuthenticatedUsersNotifications() {
+        when(mongoTemplate.remove(any(Query.class), eq(NotificationEntity.class)))
+                .thenReturn(DeleteResult.acknowledged(2));
+
+        var result = service.clearAll("user-a");
+
+        assertThat(result.cleared()).isEqualTo(2);
+        assertThat(result.clearedAt()).isEqualTo(Instant.parse("2026-10-08T18:00:00Z"));
+        ArgumentCaptor<Query> query = ArgumentCaptor.forClass(Query.class);
+        verify(mongoTemplate).remove(query.capture(), eq(NotificationEntity.class));
+        String rendered = query.getValue().getQueryObject().toJson();
+        assertThat(rendered).contains("user-a");
+        assertThat(rendered).doesNotContain("user-b");
+        verify(realtimePublisher).publish(eq("user-a"), eq("NOTIFICATIONS_CLEARED"), any());
+        verify(repository, never()).deleteByRecipientId(any());
+    }
+
+    @Test
+    void clearAllSucceedsWhenTheHistoryIsAlreadyEmpty() {
+        when(mongoTemplate.remove(any(Query.class), eq(NotificationEntity.class)))
+                .thenReturn(DeleteResult.acknowledged(0));
+
+        var result = service.clearAll("user-a");
+
+        assertThat(result.cleared()).isZero();
     }
 
     private static final String NOTE_ID = "507f1f77bcf86cd799439011";

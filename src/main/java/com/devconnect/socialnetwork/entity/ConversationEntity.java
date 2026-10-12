@@ -7,7 +7,9 @@ import org.springframework.data.mongodb.core.mapping.Document;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 @Document(collection = "conversations")
 public class ConversationEntity {
@@ -21,6 +23,8 @@ public class ConversationEntity {
     private String participantKey;
     private Instant createdAt;
     private Instant updatedAt;
+    /** Per participant, messages at or before this instant are hidden from that person only. */
+    private Map<String, Instant> historyClearedAt = new LinkedHashMap<>();
 
     public String getId() {
         return id;
@@ -68,6 +72,17 @@ public class ConversationEntity {
 
     public void setUpdatedAt(Instant updatedAt) {
         this.updatedAt = updatedAt;
+    }
+
+    public Map<String, Instant> getHistoryClearedAt() {
+        if (historyClearedAt == null) {
+            historyClearedAt = new LinkedHashMap<>();
+        }
+        return historyClearedAt;
+    }
+
+    public void setHistoryClearedAt(Map<String, Instant> historyClearedAt) {
+        this.historyClearedAt = historyClearedAt;
     }
 
     public String otherParticipant(String userId) {

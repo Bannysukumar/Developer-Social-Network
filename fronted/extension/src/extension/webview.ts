@@ -59,6 +59,7 @@ export interface HostState {
   readonly historyLoading: boolean;
   readonly historyError: string | null;
   readonly keyRecovery?: "ready" | "needed" | "unavailable";
+  readonly historyClearedAt?: Readonly<Record<string, string>>;
 }
 
 export function emptyHostState(): HostState {
@@ -104,6 +105,7 @@ export function emptyHostState(): HostState {
     historyLoading: false,
     historyError: null,
     keyRecovery: "ready",
+    historyClearedAt: {},
   };
 }
 
@@ -277,7 +279,13 @@ export function renderWebview(webview: Webview, state: HostState): string {
     }
   .typing i { display: inline-block; width: 4px; height: 4px; margin-right: 3px; border-radius: 50%; background: var(--vscode-descriptionForeground); }
   .thread-head { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; min-height: 28px; }
-  .thread-person { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 0 0 auto; }
+  .thread-person { position: relative; display: flex; align-items: center; gap: 8px; min-width: 0; flex: 0 0 auto; }
+  #thread-menu { margin-left: auto; }
+  .note-actions { margin-left: auto; }
+  .menu-pop { position: absolute; top: calc(100% + 4px); right: 0; z-index: 6; min-width: 168px; display: grid; gap: 2px; padding: 6px; border-radius: 8px; background: var(--vscode-menu-background, var(--vscode-editorWidget-background)); color: var(--vscode-menu-foreground, var(--vscode-foreground)); border: 1px solid var(--vscode-menu-border, var(--vscode-panel-border)); box-shadow: 0 8px 24px color-mix(in srgb, var(--vscode-widget-shadow, #000) 28%, transparent); }
+  .menu-pop .btn { width: 100%; justify-content: flex-start; text-align: left; }
+  #thread-menu:focus-visible, #clear-notifications:focus-visible, .menu-pop .btn:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 2px; }
+  .dialog h2 { margin: 0 0 6px; font-size: 16px; font-weight: 600; }
   .thread-person strong, .thread-person span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .icon-btn { width: 28px; min-width: 28px; padding: 0; }
   #thread { flex: 1; min-height: 0; height: 100%; display: flex; flex-direction: column; justify-content: flex-start; gap: 8px; }
@@ -586,6 +594,10 @@ export function renderWebview(webview: Webview, state: HostState): string {
             <div class="muted" id="thread-user"></div>
           </div>
           <button class="btn icon-btn" type="button" id="thread-profile" data-act="open-user" aria-label="View profile">↗</button>
+          <button class="btn quiet icon-btn" type="button" id="thread-menu" data-act="thread-menu" aria-label="Chat options" aria-haspopup="menu" aria-expanded="false" aria-controls="thread-menu-pop">⋮</button>
+          <div id="thread-menu-pop" class="menu-pop" role="menu" hidden>
+            <button class="btn quiet danger" type="button" data-act="clear-chat" role="menuitem">Clear chat</button>
+          </div>
         </div>
         <p class="muted" id="thread-connection" hidden>Reconnecting...</p>
         <div id="message-list"></div>
@@ -633,7 +645,10 @@ export function renderWebview(webview: Webview, state: HostState): string {
     <section data-screen="notifications" class="stack" hidden>
       <div class="row">
         <h1>Notifications</h1>
-        <button class="btn quiet" type="button" id="read-all">Mark all read</button>
+        <div class="row note-actions">
+          <button class="btn quiet" type="button" id="clear-notifications" disabled>Clear notifications</button>
+          <button class="btn quiet" type="button" id="read-all">Mark all read</button>
+        </div>
       </div>
       <div id="note-list" class="stack"></div>
     </section>
@@ -728,7 +743,7 @@ export function renderWebview(webview: Webview, state: HostState): string {
         <button class="btn quiet" type="button" data-settings="menu">Settings</button>
         <h1>About</h1>
         <p>DevConnect</p>
-        <p class="muted" id="about-version">Version 0.4.54</p>
+        <p class="muted" id="about-version">Version 0.4.55</p>
         <p class="muted">A developer network inside Visual Studio Code. Messages stay encrypted on your devices.</p>
       </div>
     </section>
@@ -737,6 +752,7 @@ export function renderWebview(webview: Webview, state: HostState): string {
 </div>
   <div class="dialog-back" id="dialog" hidden>
     <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-text">
+      <h2 id="dialog-title" hidden></h2>
       <p id="dialog-text"></p>
       <div class="row">
         <button class="btn" type="button" id="dialog-cancel">Cancel</button>
@@ -948,6 +964,7 @@ export function renderWebview(webview: Webview, state: HostState): string {
   }
   let pendingFiles = [];
   let attachMenuOpen = false;
+  let threadMenuOpen = false;
   function fileSize(size) {
     const value = Number(size) || 0;
     if (value < 1024) return value + " B";
@@ -1132,6 +1149,15 @@ export function renderWebview(webview: Webview, state: HostState): string {
       threadProfile.hidden = !otherId;
       threadProfile.setAttribute("data-id", otherId || "");
     }
+    if (state.screen !== "messages" || !state.activeConversationId) threadMenuOpen = false;
+    const threadMenu = document.getElementById("thread-menu");
+    const threadPop = document.getElementById("thread-menu-pop");
+    if (threadMenu) {
+      threadMenu.hidden = !state.activeConversationId;
+      threadMenu.disabled = !!state.busy;
+      threadMenu.setAttribute("aria-expanded", threadMenuOpen ? "true" : "false");
+    }
+    if (threadPop) threadPop.hidden = !threadMenuOpen;
     const threadBlock = document.getElementById("thread-block");
     const messageForm = document.getElementById("message-form");
     if (threadBlock && messageForm) {
@@ -1259,7 +1285,9 @@ export function renderWebview(webview: Webview, state: HostState): string {
       ? '<div class="history-note muted">Loading messages…</div>'
       : (state.historyError || state.error || savedChat)
         ? '<div class="history-note"><span>' + esc(state.historyError || state.error || "Saved messages did not load.") + '</span> <button class="btn" type="button" data-act="reopen-chat">Try again</button></div>'
-        : '<div class="chat-empty">' + avatarMarkup({ displayName: person.name, username: person.username }, "lg") + '<strong>You\\'re connected with ' + esc(person.name) + '</strong><span class="muted">Start the conversation by saying hello.</span></div>';
+        : (state.historyClearedAt && state.activeConversationId && state.historyClearedAt[state.activeConversationId])
+          ? '<div class="chat-empty">' + avatarMarkup({ displayName: person.name, username: person.username }, "lg") + '<strong>Chat cleared</strong><span class="muted">New messages in this conversation will show up here. The other person still has their copy.</span></div>'
+          : '<div class="chat-empty">' + avatarMarkup({ displayName: person.name, username: person.username }, "lg") + '<strong>You\\'re connected with ' + esc(person.name) + '</strong><span class="muted">Start the conversation by saying hello.</span></div>';
     list.innerHTML = recoveryBanner + historyBanner + threadBody;
     if (switchedThread) {
       list.scrollTop = list.scrollHeight;
@@ -1281,6 +1309,14 @@ export function renderWebview(webview: Webview, state: HostState): string {
     const jump = document.getElementById("jump-latest");
     jump.hidden = heldNew === 0 || !state.activeConversationId;
     jump.textContent = "↓ " + heldNew + (heldNew === 1 ? " new message" : " new messages");
+    const clearNotes = document.getElementById("clear-notifications");
+    if (clearNotes) {
+      const hasNotes = (state.notifications || []).length > 0;
+      clearNotes.disabled = !hasNotes || !!state.busy;
+      clearNotes.textContent = state.busy && hasNotes ? "Clearing…" : "Clear notifications";
+      if (state.busy && hasNotes) clearNotes.setAttribute("aria-busy", "true");
+      else clearNotes.removeAttribute("aria-busy");
+    }
     document.getElementById("note-list").innerHTML = (state.notifications || []).length ? state.notifications.map((note) =>
       '<button class="note' + (note.read ? "" : " unread") + '" data-act="open-note" data-id="' + esc(note.id) + '">' + avatarMarkup({ displayName: note.message }, "sm") + '<span class="note-copy"><strong>' + esc(note.message) + '</strong><span class="muted">' + esc(when(note.createdAt)) + '</span></span>' + (note.read ? "" : '<span class="dot" aria-label="Unread"></span>') + '</button>'
     ).join("") : emptyState("You're all caught up.", "New requests and messages show up here.", "");
@@ -1389,7 +1425,7 @@ export function renderWebview(webview: Webview, state: HostState): string {
       '<div class="card"><strong>' + esc(d.deviceName || d.id) + '</strong><span class="muted">' + esc(d.platform || "") + '</span><button class="btn" data-act="revoke" data-id="' + esc(d.id) + '">Revoke</button></div>'
     ).join("") : '<p class="muted">No devices listed.</p>';
     document.querySelectorAll("button, input, textarea, select").forEach((el) => {
-      if (el.id === "back-btn" || el.id === "thread-back" || el.id === "thread-profile" || el.id === "send-btn" || el.id === "chat-filter" || el.id === "jump-latest" || el.id === "retry" || el.id === "dialog-ok" || el.id === "dialog-cancel" || el.id === "edit-profile" || el.id === "close-edit" || el.hasAttribute("data-go") || el.hasAttribute("data-toggle") || el.hasAttribute("data-settings") || el.hasAttribute("data-friend-tab") || el.classList.contains("toggle") || el.closest("#lightbox")) return;
+      if (el.id === "back-btn" || el.id === "thread-back" || el.id === "thread-profile" || el.id === "thread-menu" || el.id === "clear-notifications" || el.id === "send-btn" || el.id === "chat-filter" || el.id === "jump-latest" || el.id === "retry" || el.id === "dialog-ok" || el.id === "dialog-cancel" || el.id === "edit-profile" || el.id === "close-edit" || el.hasAttribute("data-go") || el.hasAttribute("data-toggle") || el.hasAttribute("data-settings") || el.hasAttribute("data-friend-tab") || el.classList.contains("toggle") || el.closest("#lightbox")) return;
       el.disabled = !!state.busy;
     });
     document.querySelectorAll(".auth-submit").forEach((btn) => {
@@ -1404,12 +1440,18 @@ export function renderWebview(webview: Webview, state: HostState): string {
     paintPicker();
     publishViewing();
   }
-  function ask(text, okLabel, action) {
+  function ask(text, okLabel, action, title) {
     dialogAction = action;
+    const heading = document.getElementById("dialog-title");
+    heading.textContent = title || "";
+    heading.hidden = !title;
+    document.getElementById("dialog").querySelector("[role='dialog']").setAttribute("aria-labelledby", title ? "dialog-title" : "dialog-text");
     document.getElementById("dialog-text").textContent = text;
-    document.getElementById("dialog-ok").textContent = okLabel;
+    const ok = document.getElementById("dialog-ok");
+    ok.textContent = okLabel;
+    ok.classList.toggle("danger", !!title);
     document.getElementById("dialog").hidden = false;
-    document.getElementById("dialog-ok").focus();
+    ok.focus();
   }
   function closeDialog() {
     dialogAction = null;
@@ -1426,6 +1468,13 @@ export function renderWebview(webview: Webview, state: HostState): string {
       attachMenuOpen = false;
       const menu = document.getElementById("attach-menu");
       const button = document.getElementById("attach-btn");
+      if (menu) menu.hidden = true;
+      if (button) button.setAttribute("aria-expanded", "false");
+    }
+    if (threadMenuOpen && (!raw || (!raw.closest("#thread-menu") && !raw.closest("#thread-menu-pop")))) {
+      threadMenuOpen = false;
+      const menu = document.getElementById("thread-menu-pop");
+      const button = document.getElementById("thread-menu");
       if (menu) menu.hidden = true;
       if (button) button.setAttribute("aria-expanded", "false");
     }
@@ -1458,6 +1507,27 @@ export function renderWebview(webview: Webview, state: HostState): string {
     if (act === "open-picker" || act === "picker-tab") {
       pickerTab = pickerTab === id ? "" : (id || "sticker");
       paintPicker();
+      return;
+    }
+    if (act === "thread-menu") {
+      threadMenuOpen = !threadMenuOpen;
+      apply(state);
+      if (threadMenuOpen) {
+        const item = document.querySelector("#thread-menu-pop [role='menuitem']");
+        if (item instanceof HTMLElement) item.focus();
+      }
+      return;
+    }
+    if (act === "clear-chat") {
+      threadMenuOpen = false;
+      apply(state);
+      if (!state.activeConversationId) return;
+      ask(
+        "Clear the messages in this conversation from your chat history? This action cannot be undone.",
+        "Clear chat",
+        () => vscode.postMessage({ version: 1, type: "clearChat", conversationId: state.activeConversationId }),
+        "Clear this chat?"
+      );
       return;
     }
     if (!act || !id) return;
@@ -1693,6 +1763,11 @@ export function renderWebview(webview: Webview, state: HostState): string {
       apply(state);
       return;
     }
+    if (threadMenuOpen) {
+      threadMenuOpen = false;
+      apply(state);
+      return;
+    }
     if (!document.getElementById("dialog").hidden) closeDialog();
   });
   document.getElementById("remove-avatar").addEventListener("click", () => vscode.postMessage({ version: 1, type: "removeAvatar" }));
@@ -1901,6 +1976,16 @@ export function renderWebview(webview: Webview, state: HostState): string {
   });
   document.getElementById("retry").addEventListener("click", () => vscode.postMessage({ version: 1, type: "retry" }));
   document.getElementById("read-all").addEventListener("click", () => vscode.postMessage({ version: 1, type: "markAllNotificationsRead" }));
+  document.getElementById("clear-notifications").addEventListener("click", () => {
+    const button = document.getElementById("clear-notifications");
+    if (button.disabled) return;
+    ask(
+      "This will remove all your notifications from your notification history. This action cannot be undone.",
+      "Clear all",
+      () => vscode.postMessage({ version: 1, type: "clearNotifications" }),
+      "Clear all notifications?"
+    );
+  });
   document.getElementById("resend-verify").addEventListener("click", () => vscode.postMessage({ version: 1, type: "resendVerification" }));
   document.getElementById("logout-btn").addEventListener("click", () => vscode.postMessage({ version: 1, type: "logout" }));
   window.addEventListener("message", (event) => { if (isState(event.data)) apply(event.data); });
@@ -1969,5 +2054,6 @@ export function createStateMessage(state: HostState): HostMessage {
     historyLoading: state.historyLoading === true,
     historyError: state.historyError ?? null,
     keyRecovery: state.keyRecovery || "ready",
+    historyClearedAt: { ...(state.historyClearedAt || {}) },
   };
 }

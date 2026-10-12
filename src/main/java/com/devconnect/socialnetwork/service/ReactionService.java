@@ -127,7 +127,8 @@ public class ReactionService {
             throw new ResourceNotFoundException("Resource not found");
         }
         if (message.isDeletedForEveryone()
-                || (message.getDeletedForUserIds() != null && message.getDeletedForUserIds().contains(userId))) {
+                || (message.getDeletedForUserIds() != null && message.getDeletedForUserIds().contains(userId))
+                || conversationService.hiddenByHistoryClear(userId, conversationId, message.getCreatedAt())) {
             throw new ForbiddenException("This message is no longer available.");
         }
         return message;

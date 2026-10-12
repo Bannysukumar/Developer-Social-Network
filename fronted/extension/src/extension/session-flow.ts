@@ -6,7 +6,7 @@ import type { AuthService } from "./auth-service";
 import { messageFromFrame, notificationFromFrame, presenceFromFrame, reactionFromFrame, typingFromFrame, type ServerFrame, type SocketStatus } from "./chat-socket";
 import { applyUserReaction } from "./reaction-state";
 import { mergePresence } from "./presence-state";
-import { absorbServerNotifications, acceptLiveToast, applyNotificationRead, applyTombstone, mergeHistory, mergeLiveMessage, mergeNotification, mergeReceipt, unreadMessageNotificationsForConversation } from "./realtime-state";
+import { absorbServerNotifications, acceptLiveToast, applyNotificationRead, applyTombstone, dropClearedNotifications, mergeHistory, mergeLiveMessage, mergeNotification, mergeReceipt, unreadMessageNotificationsForConversation, visibleAfterClear } from "./realtime-state";
 import { isRiskyFile } from "./crypto/file-payload";
 import { encodeMediaPayload } from "./crypto/media-payload";
 import { emptyHostState, type HostState } from "./webview";
@@ -34,6 +34,8 @@ export class SessionFlow {
   private historyError: string | null = null;
   private keyRecovery: "ready" | "needed" | "unavailable" = "ready";
   private historyEpoch = 0;
+  private historyClearedAt: Record<string, string> = {};
+  private notificationsClearedAt: string | null = null;
   private readonly historyCache = new Map<string, { messages: HostState["messages"]; cursor: string | null; hasMore: boolean }>();
   private notifications: HostState["notifications"] = [];
   private unreadNotifications = 0;
@@ -115,10 +117,64 @@ export class SessionFlow {
     this.historyError = null;
   }
 
+  private hiddenByClear(conversationId: string, createdAt?: string): boolean {
+    const cutoff = this.historyClearedAt[conversationId];
+    return !!cutoff && !!createdAt && createdAt <= cutoff;
+  }
+
+  private applyClearFrame(frame: ServerFrame): void {
+    const data = frame.data;
+    if (!data || typeof data !== "object") return;
+    if (frame.type === "NOTIFICATIONS_CLEARED") {
+      const clearedAt = "clearedAt" in data ? (data as { clearedAt?: unknown }).clearedAt : undefined;
+      if (typeof clearedAt !== "string") return;
+      this.notificationsClearedAt = this.notificationsClearedAt && this.notificationsClearedAt > clearedAt
+        ? this.notificationsClearedAt
+        : clearedAt;
+      this.notificationEpoch += 1;
+      this.notifications = [];
+      this.unreadNotifications = 0;
+      this.pushState();
+      return;
+    }
+    const conversationId = "conversationId" in data ? (data as { conversationId?: unknown }).conversationId : undefined;
+    const clearedAt = "clearedAt" in data ? (data as { clearedAt?: unknown }).clearedAt : undefined;
+    if (typeof conversationId !== "string" || typeof clearedAt !== "string") return;
+    this.applyHistoryClear(conversationId, clearedAt);
+  }
+
+  /** Drops this user's visible history at the server boundary. The conversation row stays. */
+  private applyHistoryClear(conversationId: string, clearedAt: string): void {
+    const previous = this.historyClearedAt[conversationId];
+    const cutoff = previous && previous > clearedAt ? previous : clearedAt;
+    this.historyClearedAt = { ...this.historyClearedAt, [conversationId]: cutoff };
+    if (this.activeConversationId === conversationId) this.historyEpoch += 1;
+    if (this.activeConversationId === conversationId) {
+      this.messages = visibleAfterClear(this.messages, cutoff);
+      this.messageCursor = null;
+      this.messageHasMore = false;
+      this.historyLoading = false;
+      this.historyError = null;
+      this.mergePending(conversationId);
+    }
+    const cached = this.historyCache.get(conversationId);
+    if (cached) {
+      const messages = visibleAfterClear(cached.messages, cutoff);
+      if (messages.length === 0) this.historyCache.delete(conversationId);
+      else this.historyCache.set(conversationId, { messages, cursor: null, hasMore: false });
+    }
+    delete this.conversationPreviews[conversationId];
+    delete this.unreadByConversation[conversationId];
+    this.unreadMessages = Object.values(this.unreadByConversation).reduce((sum, count) => sum + count, 0);
+    this.pushState();
+  }
+
   private acceptHistory(opened: { conversation: { id: string }; messages: HostState["messages"]; nextCursor: string | null; hasNext: boolean }): void {
     this.activeConversationId = opened.conversation.id;
-    const kept = this.messages.filter((item) => item.conversationId === opened.conversation.id);
-    this.messages = opened.messages.length === 0 ? kept : mergeHistory(kept, opened.messages);
+    const cutoff = this.historyClearedAt[opened.conversation.id];
+    const kept = visibleAfterClear(this.messages.filter((item) => item.conversationId === opened.conversation.id), cutoff);
+    const incoming = visibleAfterClear(opened.messages, cutoff);
+    this.messages = incoming.length === 0 ? kept : mergeHistory(kept, incoming);
     this.messageCursor = opened.nextCursor;
     this.messageHasMore = opened.hasNext;
     this.historyLoading = false;
@@ -154,10 +210,12 @@ export class SessionFlow {
 
   private async openThread(message: { conversationId?: string; participantId?: string }): Promise<void> {
     if (!this.auth.isAuthenticated()) return;
+    const cutoff = message.conversationId ? this.historyClearedAt[message.conversationId] : undefined;
     const cached = message.conversationId ? this.historyCache.get(message.conversationId) : undefined;
-    if (cached && cached.messages.length > 0 && message.conversationId) {
+    const cachedMessages = cached ? visibleAfterClear(cached.messages, cutoff) : [];
+    if (cached && cachedMessages.length > 0 && message.conversationId) {
       this.activeConversationId = message.conversationId;
-      this.messages = cached.messages;
+      this.messages = cachedMessages;
       this.messageCursor = cached.cursor;
       this.messageHasMore = cached.hasMore;
       this.historyLoading = false;
@@ -168,7 +226,7 @@ export class SessionFlow {
     const epoch = this.beginHistory();
     if (message.conversationId) {
       this.activeConversationId = message.conversationId;
-      if (!cached?.messages.length) this.messages = [];
+      if (cachedMessages.length === 0) this.messages = [];
     }
     this.show("messages", this.screen !== "messages");
     this.pushState();
@@ -182,10 +240,17 @@ export class SessionFlow {
       if (epoch !== this.historyEpoch) return;
       this.rememberConversation(opened.conversation);
       this.acceptHistory(opened);
-      if (opened.messages.length === 0 && opened.conversation.updatedAt && opened.conversation.updatedAt !== opened.conversation.createdAt) {
+      const visible = visibleAfterClear(opened.messages, this.historyClearedAt[opened.conversation.id]);
+      if (
+        visible.length === 0
+        && opened.messages.length === 0
+        && opened.conversation.updatedAt
+        && opened.conversation.updatedAt !== opened.conversation.createdAt
+        && !this.historyClearedAt[opened.conversation.id]
+      ) {
         this.historyError = "Saved messages didn't load. Try again.";
       }
-      this.finishOpen(opened.conversation.id, opened.messages[0]?.displayText, opened.conversation.participantIds);
+      this.finishOpen(opened.conversation.id, visible[0]?.displayText, opened.conversation.participantIds);
       this.pushState();
       this.conversations = await this.auth.listConversations();
       if (epoch === this.historyEpoch) this.pushState();
@@ -223,9 +288,15 @@ export class SessionFlow {
     try {
       const page = await this.auth.loadOlderMessages(conversationId, cursor);
       if (epoch !== this.historyEpoch || this.activeConversationId !== conversationId) return;
-      if (page.messages.length > 0) this.messages = mergeHistory(this.messages, page.messages);
-      this.messageCursor = page.nextCursor;
-      this.messageHasMore = page.messages.length > 0 && page.hasNext;
+      const incoming = visibleAfterClear(page.messages, this.historyClearedAt[conversationId]);
+      if (incoming.length > 0) {
+        this.messages = mergeHistory(this.messages, incoming);
+        this.messageCursor = page.nextCursor;
+        this.messageHasMore = page.hasNext;
+      } else {
+        this.messageCursor = null;
+        this.messageHasMore = false;
+      }
       this.log(`history older-page conversationId=${conversationId} messages=${page.messages.length} hasMore=${page.hasNext} ms=${Date.now() - started}`);
     } catch (error) {
       if (epoch !== this.historyEpoch) return;
@@ -283,6 +354,7 @@ export class SessionFlow {
       historyLoading: this.historyLoading,
       historyError: this.historyError,
       keyRecovery: this.keyRecovery,
+      historyClearedAt: { ...this.historyClearedAt },
     };
   }
 
@@ -397,8 +469,13 @@ export class SessionFlow {
       }
       return;
     }
+    if (frame.type === "HISTORY_CLEARED" || frame.type === "NOTIFICATIONS_CLEARED") {
+      this.applyClearFrame(frame);
+      return;
+    }
     const message = messageFromFrame(frame);
     if (message) {
+      if (this.hiddenByClear(message.conversationId, message.createdAt)) return;
       const alreadySeen = this.seenMessageIds.has(message.id);
       if (alreadySeen && !message.deletedForEveryone) return;
       this.seenMessageIds.add(message.id);
@@ -441,6 +518,7 @@ export class SessionFlow {
     }
     const note = notificationFromFrame(frame);
     if (!note) return;
+    if (this.notificationsClearedAt && (!note.createdAt || note.createdAt <= this.notificationsClearedAt)) return;
     const viewingThisMessage = note.type === "NEW_MESSAGE" && !!note.referenceId && this.viewingConversation(note.referenceId);
     const incoming = viewingThisMessage && !note.read && !this.confirmedNotificationReads.has(note.id)
       ? { ...note, read: true }
@@ -524,6 +602,9 @@ export class SessionFlow {
     this.notificationAckQueued.clear();
     this.notificationAckAgain.clear();
     this.notificationEpoch += 1;
+    this.notificationsClearedAt = null;
+    this.historyClearedAt = {};
+    this.conversationPreviews = {};
     this.toast = null;
     this.devices = [];
     this.blockedUsers = [];
@@ -579,8 +660,16 @@ export class SessionFlow {
       const snapshot = this.chatCache.load(accountId);
       if (snapshot) {
         this.conversations = [...snapshot.conversations];
+        this.historyClearedAt = { ...(snapshot.clearedAt ?? {}) };
         for (const [id, thread] of Object.entries(snapshot.threads)) {
-          this.historyCache.set(id, { messages: [...thread.messages], cursor: thread.cursor, hasMore: thread.hasMore });
+          const messages = visibleAfterClear(thread.messages, this.historyClearedAt[id]);
+          if (messages.length === 0) continue;
+          const trimmed = messages.length !== thread.messages.length;
+          this.historyCache.set(id, {
+            messages,
+            cursor: trimmed ? null : thread.cursor,
+            hasMore: trimmed ? false : thread.hasMore,
+          });
         }
       }
     }
@@ -611,7 +700,7 @@ export class SessionFlow {
       threads[id] = { messages: thread.messages, cursor: thread.cursor, hasMore: thread.hasMore };
     }
     try {
-      this.chatCache.save(accountId, { conversations: this.conversations, threads });
+      this.chatCache.save(accountId, { conversations: this.conversations, threads, clearedAt: this.historyClearedAt });
     } catch (error) {
       this.log(`chat cache skipped: ${error instanceof Error ? error.name : "error"}`);
     }
@@ -967,7 +1056,11 @@ export class SessionFlow {
   }
 
   private applyServerNotifications(items: HostState["notifications"], unreadCount: number): void {
-    const absorbed = absorbServerNotifications(items, unreadCount, this.protectedNotificationReads());
+    const visible = dropClearedNotifications(items, this.notificationsClearedAt);
+    const unread = this.notificationsClearedAt
+      ? visible.reduce((count, note) => count + (note.read ? 0 : 1), 0)
+      : unreadCount;
+    const absorbed = absorbServerNotifications(visible, unread, this.protectedNotificationReads());
     this.notifications = absorbed.notifications;
     this.unreadNotifications = absorbed.unreadCount;
   }
@@ -1448,6 +1541,23 @@ export class SessionFlow {
         }
         case "markNotificationRead": {
           await this.acknowledge(message.notificationId);
+          break;
+        }
+        case "clearNotifications": {
+          const result = await this.auth.clearNotifications();
+          this.notificationsClearedAt = result.clearedAt;
+          this.notificationEpoch += 1;
+          this.notifications = [];
+          this.unreadNotifications = 0;
+          this.confirmedNotificationReads.clear();
+          this.optimisticNotificationReads.clear();
+          this.notice = result.cleared === 0 ? "Notifications are already clear." : "Notifications cleared.";
+          break;
+        }
+        case "clearChat": {
+          const clearedAt = await this.auth.clearConversation(message.conversationId);
+          this.applyHistoryClear(message.conversationId, clearedAt);
+          this.notice = "Chat cleared. The other person still has their messages.";
           break;
         }
         case "markAllNotificationsRead": {

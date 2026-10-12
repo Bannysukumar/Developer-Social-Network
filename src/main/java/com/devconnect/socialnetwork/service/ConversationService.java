@@ -4,8 +4,10 @@ import com.devconnect.socialnetwork.domain.AccountStatus;
 import com.devconnect.socialnetwork.domain.ConversationType;
 import com.devconnect.socialnetwork.dto.PageResponse;
 import com.devconnect.socialnetwork.dto.WriteResult;
+import com.devconnect.socialnetwork.dto.response.ClearHistoryResponse;
 import com.devconnect.socialnetwork.dto.response.ConversationResponse;
 import com.devconnect.socialnetwork.entity.ConversationEntity;
+import com.devconnect.socialnetwork.entity.MessageEntity;
 import com.devconnect.socialnetwork.entity.UserEntity;
 import com.devconnect.socialnetwork.exception.ForbiddenException;
 import com.devconnect.socialnetwork.exception.InvalidStateException;
@@ -14,18 +16,21 @@ import com.devconnect.socialnetwork.repository.ConversationRepository;
 import com.devconnect.socialnetwork.repository.UserRepository;
 import com.devconnect.socialnetwork.util.Ids;
 import com.devconnect.socialnetwork.util.Paging;
+import com.devconnect.socialnetwork.websocket.RealtimePublisher;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.stereotype.Service;
 
 import java.time.Clock;
 import java.time.Instant;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 
 @Service
 public class ConversationService {
@@ -36,6 +41,7 @@ public class ConversationService {
     private final BlockService blockService;
     private final MongoTemplate mongoTemplate;
     private final Clock clock;
+    private final RealtimePublisher realtimePublisher;
 
     public ConversationService(
             ConversationRepository repository,
@@ -43,7 +49,8 @@ public class ConversationService {
             FriendshipService friendshipService,
             BlockService blockService,
             MongoTemplate mongoTemplate,
-            Clock clock
+            Clock clock,
+            RealtimePublisher realtimePublisher
     ) {
         this.repository = repository;
         this.userRepository = userRepository;
@@ -51,6 +58,7 @@ public class ConversationService {
         this.blockService = blockService;
         this.mongoTemplate = mongoTemplate;
         this.clock = clock;
+        this.realtimePublisher = realtimePublisher;
     }
 
     public WriteResult<ConversationResponse> create(String userId, String participantId) {
@@ -118,6 +126,47 @@ public class ConversationService {
 
     public ConversationResponse get(String userId, String conversationId) {
         return toResponse(requireMember(userId, conversationId));
+    }
+
+    /**
+     * Hides this participant's view of messages created at or before now.
+     * Shared ciphertext stays so the other participant's history is unchanged.
+     * Messages created after this instant, including ones that arrive while this user is offline, stay visible.
+     * Calling it again moves only this user's boundary forward.
+     */
+    public ClearHistoryResponse clearHistory(String userId, String conversationId) {
+        List<String> conversationIds = relatedConversationIds(userId, conversationId);
+        Instant clearedAt = clock.instant();
+        for (String id : conversationIds) {
+            ConversationEntity conversation = requireMember(userId, id);
+            conversation.getHistoryClearedAt().put(userId, clearedAt);
+            repository.save(conversation);
+        }
+        mongoTemplate.updateMulti(
+                Query.query(Criteria.where("conversationId").in(conversationIds)
+                        .and("createdAt").lte(clearedAt)
+                        .and("deletedForUserIds").ne(userId)),
+                new Update().addToSet("deletedForUserIds", userId),
+                MessageEntity.class
+        );
+        realtimePublisher.publish(userId, "HISTORY_CLEARED", Map.of(
+                "conversationId", conversationId,
+                "clearedAt", clearedAt.toString()
+        ));
+        return new ClearHistoryResponse(conversationId, clearedAt);
+    }
+
+    public Instant historyClearedAt(String userId, String conversationId) {
+        ConversationEntity conversation = requireMember(userId, conversationId);
+        return conversation.getHistoryClearedAt().get(userId);
+    }
+
+    public boolean hiddenByHistoryClear(String userId, String conversationId, Instant createdAt) {
+        if (createdAt == null) {
+            return false;
+        }
+        Instant clearedAt = historyClearedAt(userId, conversationId);
+        return clearedAt != null && !createdAt.isAfter(clearedAt);
     }
 
     /** Every one-to-one conversation for this pair, including older rows saved before the pair key existed. */

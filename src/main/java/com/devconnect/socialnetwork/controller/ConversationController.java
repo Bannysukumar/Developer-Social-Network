@@ -6,6 +6,7 @@ import com.devconnect.socialnetwork.dto.PageResponse;
 import com.devconnect.socialnetwork.dto.WriteResult;
 import com.devconnect.socialnetwork.dto.request.CreateConversationRequest;
 import com.devconnect.socialnetwork.dto.request.SendMessageRequest;
+import com.devconnect.socialnetwork.dto.response.ClearHistoryResponse;
 import com.devconnect.socialnetwork.dto.response.ConversationResponse;
 import com.devconnect.socialnetwork.dto.response.MessageResponse;
 import com.devconnect.socialnetwork.security.SecurityUtils;
@@ -68,6 +69,15 @@ public class ConversationController {
     @Operation(summary = "Get a conversation the caller belongs to")
     public ResponseEntity<ApiResponse<ConversationResponse>> get(@PathVariable String conversationId) {
         return ApiResponses.ok("Conversation retrieved", conversationService.get(SecurityUtils.currentUserId(), conversationId));
+    }
+
+    @PostMapping("/{conversationId}/clear")
+    @Operation(summary = "Hide this caller's history in one conversation")
+    public ResponseEntity<ApiResponse<ClearHistoryResponse>> clear(@PathVariable String conversationId) {
+        return ApiResponses.ok(
+                "Chat cleared",
+                conversationService.clearHistory(SecurityUtils.currentUserId(), conversationId)
+        );
     }
 
     @GetMapping("/{conversationId}/messages")

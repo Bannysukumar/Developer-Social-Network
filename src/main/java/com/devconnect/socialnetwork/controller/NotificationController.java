@@ -1,6 +1,7 @@
 package com.devconnect.socialnetwork.controller;
 
 import com.devconnect.socialnetwork.dto.ApiResponse;
+import com.devconnect.socialnetwork.dto.response.ClearNotificationsResponse;
 import com.devconnect.socialnetwork.dto.response.CountResponse;
 import com.devconnect.socialnetwork.dto.response.NotificationListResponse;
 import com.devconnect.socialnetwork.dto.response.NotificationResponse;
@@ -13,6 +14,7 @@ import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -51,5 +53,11 @@ public class NotificationController {
     @Operation(summary = "Mark every unread notification read")
     public ResponseEntity<ApiResponse<CountResponse>> readAll() {
         return ApiResponses.ok("Notifications marked read", notificationService.markAllRead(SecurityUtils.currentUserId()));
+    }
+
+    @DeleteMapping
+    @Operation(summary = "Delete the caller's notification history")
+    public ResponseEntity<ApiResponse<ClearNotificationsResponse>> clear() {
+        return ApiResponses.ok("Notifications cleared", notificationService.clearAll(SecurityUtils.currentUserId()));
     }
 }

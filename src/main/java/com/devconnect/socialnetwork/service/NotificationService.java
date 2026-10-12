@@ -2,6 +2,7 @@ package com.devconnect.socialnetwork.service;
 
 import com.devconnect.socialnetwork.domain.NotificationType;
 import com.devconnect.socialnetwork.dto.PageResponse;
+import com.devconnect.socialnetwork.dto.response.ClearNotificationsResponse;
 import com.devconnect.socialnetwork.dto.response.CountResponse;
 import com.devconnect.socialnetwork.dto.response.NotificationListResponse;
 import com.devconnect.socialnetwork.dto.response.NotificationResponse;
@@ -11,6 +12,7 @@ import com.devconnect.socialnetwork.repository.NotificationRepository;
 import com.devconnect.socialnetwork.util.Ids;
 import com.devconnect.socialnetwork.util.Paging;
 import com.devconnect.socialnetwork.websocket.RealtimePublisher;
+import com.mongodb.client.result.DeleteResult;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoTemplate;
@@ -22,6 +24,7 @@ import org.springframework.stereotype.Service;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Map;
 
 @Service
 public class NotificationService {
@@ -112,6 +115,20 @@ public class NotificationService {
                 NotificationEntity.class
         );
         return (int) result.getModifiedCount();
+    }
+
+    /**
+     * Deletes notification rows for the authenticated recipient. Messages, friendships,
+     * and the other person's notifications are left in place. A second call deletes nothing.
+     */
+    public ClearNotificationsResponse clearAll(String userId) {
+        Instant clearedAt = clock.instant();
+        DeleteResult result = mongoTemplate.remove(
+                Query.query(Criteria.where("recipientId").is(userId)),
+                NotificationEntity.class
+        );
+        realtimePublisher.publish(userId, "NOTIFICATIONS_CLEARED", Map.of("clearedAt", clearedAt.toString()));
+        return new ClearNotificationsResponse(result.getDeletedCount(), clearedAt);
     }
 
     public void deleteForRecipient(String userId) {

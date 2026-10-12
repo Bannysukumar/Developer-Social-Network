@@ -31,6 +31,7 @@ import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.stereotype.Service;
 
 import java.time.Clock;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -153,20 +154,23 @@ public class MessageService {
         List<String> conversationIds = conversationService.relatedConversationIds(userId, conversationId);
         int pageSize = Math.min(Math.max(limit, 1), 50);
         CursorCodec.Cursor decoded = CursorCodec.decode(cursor);
-        Criteria criteria = Criteria.where("conversationId").in(conversationIds)
-                .and("deletedForUserIds").nin(userId);
-        if (decoded != null) {
-            criteria = new Criteria().andOperator(
-                    criteria,
-                    new Criteria().orOperator(
-                            Criteria.where("createdAt").lt(decoded.createdAt()),
-                            new Criteria().andOperator(
-                                    Criteria.where("createdAt").is(decoded.createdAt()),
-                                    Criteria.where("_id").lt(decoded.id())
-                            )
-                    )
-            );
+        List<Criteria> parts = new ArrayList<>();
+        parts.add(Criteria.where("conversationId").in(conversationIds)
+                .and("deletedForUserIds").nin(userId));
+        Instant clearedAt = conversationService.historyClearedAt(userId, conversationId);
+        if (clearedAt != null) {
+            parts.add(Criteria.where("createdAt").gt(clearedAt));
         }
+        if (decoded != null) {
+            parts.add(new Criteria().orOperator(
+                    Criteria.where("createdAt").lt(decoded.createdAt()),
+                    new Criteria().andOperator(
+                            Criteria.where("createdAt").is(decoded.createdAt()),
+                            Criteria.where("_id").lt(decoded.id())
+                    )
+            ));
+        }
+        Criteria criteria = parts.size() == 1 ? parts.get(0) : new Criteria().andOperator(parts.toArray(Criteria[]::new));
         Query query = Query.query(criteria)
                 .with(Sort.by(Sort.Direction.DESC, "createdAt").and(Sort.by(Sort.Direction.DESC, "_id")))
                 .limit(pageSize + 1);
@@ -249,12 +253,16 @@ public class MessageService {
     public int markConversationRead(String userId, String conversationId) {
         long started = System.nanoTime();
         conversationService.requireMember(userId, conversationId);
-        Query query = Query.query(Criteria.where("conversationId").is(conversationId)
+        Criteria criteria = Criteria.where("conversationId").is(conversationId)
                 .and("recipientId").is(userId)
                 .and("deletedForEveryone").ne(true)
                 .and("deletedForUserIds").ne(userId)
-                .and("status").ne(MessageStatus.READ))
-                .limit(50);
+                .and("status").ne(MessageStatus.READ);
+        Instant clearedAt = conversationService.historyClearedAt(userId, conversationId);
+        if (clearedAt != null) {
+            criteria = criteria.and("createdAt").gt(clearedAt);
+        }
+        Query query = Query.query(criteria).limit(50);
         List<MessageEntity> messages = mongoTemplate.find(query, MessageEntity.class);
         if (messages.isEmpty()) {
             notificationService.markMessageNotificationsRead(userId, conversationId);
@@ -344,9 +352,18 @@ public class MessageService {
     }
 
     public void deliverPending(String userId) {
-        for (MessageEntity message : messageRepository.findTop20ByRecipientIdAndStatusOrderByCreatedAtAsc(
-                userId, MessageStatus.SENT)) {
-            if (message.getDeletedForUserIds().contains(userId) || message.isDeletedForEveryone()) {
+        Query pendingQuery = Query.query(Criteria.where("recipientId").is(userId)
+                        .and("status").is(MessageStatus.SENT)
+                        .and("deletedForEveryone").ne(true)
+                        .and("deletedForUserIds").ne(userId))
+                .with(Sort.by(Sort.Direction.ASC, "createdAt"))
+                .limit(20);
+        for (MessageEntity message : mongoTemplate.find(pendingQuery, MessageEntity.class)) {
+            try {
+                if (conversationService.hiddenByHistoryClear(userId, message.getConversationId(), message.getCreatedAt())) {
+                    continue;
+                }
+            } catch (ResourceNotFoundException ex) {
                 continue;
             }
             if (blockService.eitherBlocked(userId, message.getSenderId())) {
@@ -379,6 +396,9 @@ public class MessageService {
                 .orElseThrow(() -> new ResourceNotFoundException("Resource not found"));
         conversationService.requireMember(userId, message.getConversationId());
         if (!message.getSenderId().equals(userId) && !message.getRecipientId().equals(userId)) {
+            throw new ResourceNotFoundException("Resource not found");
+        }
+        if (conversationService.hiddenByHistoryClear(userId, message.getConversationId(), message.getCreatedAt())) {
             throw new ResourceNotFoundException("Resource not found");
         }
         return message;

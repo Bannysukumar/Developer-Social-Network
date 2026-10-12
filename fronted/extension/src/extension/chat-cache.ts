@@ -12,6 +12,7 @@ export interface CachedThread {
 export interface ChatSnapshot {
   readonly conversations: readonly ConversationDto[];
   readonly threads: Readonly<Record<string, CachedThread>>;
+  readonly clearedAt?: Readonly<Record<string, string>>;
 }
 
 export interface ChatCache {
@@ -42,7 +43,7 @@ export function slimSnapshot(snapshot: ChatSnapshot): ChatSnapshot {
       hasMore: thread.hasMore,
     };
   }
-  return { conversations: snapshot.conversations.slice(0, 30), threads };
+  return { conversations: snapshot.conversations.slice(0, 30), threads, clearedAt: snapshot.clearedAt };
 }
 
 export class MemoryChatCache implements ChatCache {

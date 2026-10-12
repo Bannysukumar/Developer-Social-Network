@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type { ApiClient } from "./client";
 import { pathId } from "./users";
 import {
@@ -6,6 +7,11 @@ import {
   type NotificationDto,
   type NotificationListDto,
 } from "../shared/api-types";
+
+const notificationClearSchema = z.object({
+  cleared: z.number(),
+  clearedAt: z.string().min(1),
+}).strict();
 
 export class NotificationsApi {
   constructor(private readonly client: ApiClient) {}
@@ -27,5 +33,13 @@ export class NotificationsApi {
 
   markAllRead(): Promise<unknown> {
     return this.client.request("notifications/read-all", undefined, { method: "POST" });
+  }
+
+  clearAll(): Promise<{ cleared: number; clearedAt: string }> {
+    return this.client.request(
+      "notifications",
+      notificationClearSchema,
+      { method: "DELETE" },
+    );
   }
 }

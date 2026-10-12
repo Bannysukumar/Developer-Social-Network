@@ -226,6 +226,12 @@ export const webviewMessageSchema = z.discriminatedUnion("type", [
     notificationId: z.string().min(1),
   }).strict(),
   z.object({ version: z.literal(1), type: z.literal("markAllNotificationsRead") }).strict(),
+  z.object({ version: z.literal(1), type: z.literal("clearNotifications") }).strict(),
+  z.object({
+    version: z.literal(1),
+    type: z.literal("clearChat"),
+    conversationId: z.string().min(1),
+  }).strict(),
   z.object({ version: z.literal(1), type: z.literal("loadDevices") }).strict(),
   z.object({
     version: z.literal(1),
@@ -319,6 +325,7 @@ export const hostMessageSchema = z.object({
   historyLoading: z.boolean(),
   historyError: z.string().nullable(),
   keyRecovery: z.enum(["ready", "needed", "unavailable"]).optional(),
+  historyClearedAt: z.record(z.string(), z.string()).optional(),
 }).strict();
 
 export type HostMessage = z.infer<typeof hostMessageSchema>;

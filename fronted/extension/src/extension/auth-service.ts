@@ -615,6 +615,15 @@ export class AuthService {
     return this.notificationsApi.markAllRead();
   }
 
+  clearNotifications(): Promise<{ cleared: number; clearedAt: string }> {
+    return this.notificationsApi.clearAll();
+  }
+
+  async clearConversation(conversationId: string): Promise<string> {
+    const result = await this.conversationsApi.clearHistory(conversationId);
+    return result.clearedAt;
+  }
+
   async tryRefreshAccessToken(): Promise<string | undefined> {
     return this.refreshAccessToken();
   }

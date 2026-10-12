@@ -162,6 +162,24 @@ export function unreadMessageNotificationsForConversation<T extends { id: string
   return notifications.filter((note) => note.type === "NEW_MESSAGE" && !note.read && note.referenceId === conversationId);
 }
 
+/** Notifications created at or before a clear stay gone, including a stale list that arrives later. */
+export function dropClearedNotifications<T extends { createdAt?: string }>(
+  items: readonly T[],
+  clearedAt: string | null,
+): T[] {
+  if (!clearedAt) return [...items];
+  return items.filter((item) => !!item.createdAt && item.createdAt > clearedAt);
+}
+
+/** Messages at or before a per-user clear stay hidden. Unsent local bubbles remain. */
+export function visibleAfterClear<T extends { id: string; createdAt?: string }>(
+  messages: readonly T[],
+  clearedAt: string | undefined,
+): T[] {
+  if (!clearedAt) return [...messages];
+  return messages.filter((message) => message.id.startsWith("local-") || (!!message.createdAt && message.createdAt > clearedAt));
+}
+
 /** A server refresh must not turn a confirmed read back into unread. Other conversations stay as the server sent them. */
 export function absorbServerNotifications<T extends { id: string; read: boolean }>(
   incoming: readonly T[],
