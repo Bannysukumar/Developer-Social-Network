@@ -3,6 +3,7 @@ import { AuthApi } from "../api/auth";
 import { ApiClient } from "../api/client";
 import type { ApiConfig } from "../api/config";
 import { ConversationsApi } from "../api/conversations";
+import { StoriesApi, type StoryCard, type StoryTray, type StoryViewer } from "../api/stories";
 import { DevicesApi } from "../api/devices";
 import { ApiError, isAuthenticationFailure } from "../api/errors";
 import { FriendsApi } from "../api/friends";
@@ -53,6 +54,7 @@ export class AuthService {
   private usersApi: UsersApi;
   private friendsApi: FriendsApi;
   private conversationsApi: ConversationsApi;
+  private storiesApi: StoriesApi;
   private notificationsApi: NotificationsApi;
   private devicesApi: DevicesApi;
   private keysApi: KeysApi;
@@ -70,6 +72,7 @@ export class AuthService {
     this.usersApi = new UsersApi(this.client);
     this.friendsApi = new FriendsApi(this.client);
     this.conversationsApi = new ConversationsApi(this.client);
+    this.storiesApi = new StoriesApi(this.client);
     this.notificationsApi = new NotificationsApi(this.client);
     this.devicesApi = new DevicesApi(this.client);
     this.keysApi = new KeysApi(this.client);
@@ -319,6 +322,38 @@ export class AuthService {
     };
   }
 
+  loadStories(): Promise<StoryTray> {
+    return this.storiesApi.tray();
+  }
+
+  publishStory(input: { clientStoryId: string; caption: string; textStyle: "plain" | "light" | "dark"; contentType: string; bytes: Uint8Array }): Promise<StoryCard> {
+    return this.storiesApi.publish(input);
+  }
+
+  viewStory(storyId: string): Promise<StoryCard> {
+    return this.storiesApi.view(storyId);
+  }
+
+  storyViewers(storyId: string): Promise<StoryViewer[]> {
+    return this.storiesApi.viewers(storyId);
+  }
+
+  reactToStory(storyId: string, emoji: string): Promise<StoryCard> {
+    return this.storiesApi.react(storyId, emoji);
+  }
+
+  clearStoryReaction(storyId: string): Promise<StoryCard> {
+    return this.storiesApi.clearReaction(storyId);
+  }
+
+  deleteStory(storyId: string): Promise<unknown> {
+    return this.storiesApi.remove(storyId);
+  }
+
+  storyMedia(storyId: string): Promise<Uint8Array> {
+    return this.storiesApi.media(storyId);
+  }
+
   async loadOlderMessages(conversationId: string, cursor: string): Promise<{ messages: DisplayMessage[]; nextCursor: string | null; hasNext: boolean }> {
     const page = await this.conversationsApi.listMessages(conversationId, 30, cursor);
     return {
@@ -326,6 +361,22 @@ export class AuthService {
       nextCursor: page.nextCursor ?? null,
       hasNext: page.hasNext,
     };
+  }
+
+  /**
+   * Walks ciphertext pages and decrypts them on this device.
+   * The server never receives plaintext. A conversation that is still longer than 40 pages is marked incomplete.
+   */
+  async scanHistory(conversationId: string): Promise<{ messages: DisplayMessage[]; complete: boolean }> {
+    const collected: DisplayMessage[] = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < 40; page += 1) {
+      const result = await this.conversationsApi.listMessages(conversationId, 50, cursor);
+      collected.push(...result.items.map((item) => this.toDisplayMessage(item)));
+      if (!result.hasNext || !result.nextCursor) return { messages: collected, complete: true };
+      cursor = result.nextCursor;
+    }
+    return { messages: collected, complete: false };
   }
 
   hasDeviceKeys(): boolean {
@@ -812,6 +863,7 @@ export class AuthService {
     this.usersApi = new UsersApi(this.client);
     this.friendsApi = new FriendsApi(this.client);
     this.conversationsApi = new ConversationsApi(this.client);
+    this.storiesApi = new StoriesApi(this.client);
     this.notificationsApi = new NotificationsApi(this.client);
     this.devicesApi = new DevicesApi(this.client);
     this.keysApi = new KeysApi(this.client);

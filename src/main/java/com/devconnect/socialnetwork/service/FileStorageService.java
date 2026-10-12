@@ -56,6 +56,26 @@ public class FileStorageService {
         return repository.save(entity);
     }
 
+    public StoredObject storeStory(byte[] bytes) {
+        if (bytes == null || bytes.length == 0 || bytes.length > StoryMediaInspector.MAX_VIDEO_BYTES) {
+            throw new ValidationFailedException("File size is not allowed");
+        }
+        String key = "stories/" + Ids.newId();
+        Path target = resolveKey(key);
+        try {
+            Files.createDirectories(target.getParent());
+            Files.write(target, bytes);
+            return new StoredObject(key, bytes.length);
+        } catch (IOException ex) {
+            try {
+                Files.deleteIfExists(target);
+            } catch (IOException ignored) {
+                // The story row is not saved when storage fails.
+            }
+            throw new IllegalStateException("File could not be stored", ex);
+        }
+    }
+
     public StoredObject storeOpaque(InputStream input, long declaredSize) {
         long max = properties.getStorage().getMaxAttachmentBytes();
         if (declaredSize > max) {

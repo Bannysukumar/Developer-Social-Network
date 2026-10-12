@@ -56,6 +56,7 @@ public class UserService {
     private final PasswordEncoder passwordEncoder;
     private final MongoTemplate mongoTemplate;
     private final Clock clock;
+    private final StoryService storyService;
 
     public UserService(
             UserRepository userRepository,
@@ -72,7 +73,8 @@ public class UserService {
             UserMapper userMapper,
             PasswordEncoder passwordEncoder,
             MongoTemplate mongoTemplate,
-            Clock clock
+            Clock clock,
+            StoryService storyService
     ) {
         this.userRepository = userRepository;
         this.friendshipService = friendshipService;
@@ -89,6 +91,7 @@ public class UserService {
         this.passwordEncoder = passwordEncoder;
         this.mongoTemplate = mongoTemplate;
         this.clock = clock;
+        this.storyService = storyService;
     }
 
     public UserProfileResponse me(String userId) {
@@ -278,6 +281,7 @@ public class UserService {
         notificationService.deleteForRecipient(userId);
         notificationService.anonymizeActor(userId);
         fileStorageService.deleteAllForOwner(userId);
+        storyService.deleteAllForOwner(userId);
         auditService.record(AuditEventType.ACCOUNT_DELETED, userId, Map.of());
     }
 

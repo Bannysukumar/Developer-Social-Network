@@ -192,7 +192,7 @@ export const attachmentCreatedSchema = z.object({
 
 export const notificationSchema = z.object({
   id: z.string().min(1),
-  type: z.enum(["FRIEND_REQUEST", "FRIEND_REQUEST_ACCEPTED", "NEW_MESSAGE", "SECURITY", "ACCOUNT"]),
+  type: z.enum(["FRIEND_REQUEST", "FRIEND_REQUEST_ACCEPTED", "NEW_MESSAGE", "STORY_REACTION", "SECURITY", "ACCOUNT"]),
   actorId: z.string().nullable().optional(),
   referenceId: z.string().nullable().optional(),
   message: z.string().min(1),

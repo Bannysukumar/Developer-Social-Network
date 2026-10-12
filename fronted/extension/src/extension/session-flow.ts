@@ -11,6 +11,8 @@ import { isRiskyFile } from "./crypto/file-payload";
 import { encodeMediaPayload } from "./crypto/media-payload";
 import { emptyHostState, type HostState } from "./webview";
 import { MemoryChatCache, type ChatCache } from "./chat-cache";
+import { toLibraryEntry, visibleLibrary, type LibraryEntry } from "./conversation-library";
+import type { StoryCard, StoryTray, StoryViewer } from "../api/stories";
 import { createClientMessageId, isPermanentDeliveryError, MemoryOutbox, nextAttemptDelay, type OutboxRecord, type OutboxStore } from "./outbox";
 
 export class SessionFlow {
@@ -36,6 +38,23 @@ export class SessionFlow {
   private historyEpoch = 0;
   private historyClearedAt: Record<string, string> = {};
   private notificationsClearedAt: string | null = null;
+  private threadPane: "chat" | "search" | "media" | "docs" = "chat";
+  private library: LibraryEntry[] = [];
+  private libraryConversationId: string | null = null;
+  private libraryLoading = false;
+  private libraryError: string | null = null;
+  private libraryComplete = true;
+  private libraryEpoch = 0;
+  private highlightMessageId: string | null = null;
+  private storyTray: StoryTray = { mine: [], rings: [] };
+  private storiesLoading = false;
+  private storiesError: string | null = null;
+  private storyEpoch = 0;
+  private storyViewer: { ownerId: string; storyId: string } | null = null;
+  private storyStage: NonNullable<HostState["storyStage"]> | null = null;
+  private storyViewers: StoryViewer[] = [];
+  private readonly recordedStoryViews = new Set<string>();
+  private readonly libraryCache = new Map<string, { entries: LibraryEntry[]; messages: HostState["messages"]; complete: boolean }>();
   private readonly historyCache = new Map<string, { messages: HostState["messages"]; cursor: string | null; hasMore: boolean }>();
   private notifications: HostState["notifications"] = [];
   private unreadNotifications = 0;
@@ -117,6 +136,272 @@ export class SessionFlow {
     this.historyError = null;
   }
 
+  private rememberLibraryMessage(message: HostState["messages"][number]): void {
+    const bag = this.libraryCache.get(message.conversationId);
+    if (!bag || bag.entries.some((entry) => entry.id === message.id)) return;
+    const cutoff = this.historyClearedAt[message.conversationId];
+    const entry = toLibraryEntry(message);
+    const visible = visibleLibrary([entry], message.conversationId, cutoff);
+    if (visible.length === 0) return;
+    bag.entries = [visible[0]!, ...bag.entries];
+    bag.messages = [message, ...bag.messages];
+    if (this.libraryConversationId === message.conversationId) this.library = bag.entries;
+  }
+
+  private async openLibrary(pane: "search" | "media" | "docs"): Promise<void> {
+    const conversationId = this.activeConversationId;
+    if (!conversationId) return;
+    this.threadPane = pane;
+    this.libraryError = null;
+    this.highlightMessageId = null;
+    const cached = this.libraryCache.get(conversationId);
+    if (cached) {
+      this.libraryConversationId = conversationId;
+      this.library = cached.entries;
+      this.libraryComplete = cached.complete;
+      this.libraryLoading = false;
+      return;
+    }
+    const epoch = this.libraryEpoch + 1;
+    this.libraryEpoch = epoch;
+    this.libraryLoading = true;
+    this.library = [];
+    this.libraryConversationId = conversationId;
+    this.pushState();
+    try {
+      const scanned = await this.auth.scanHistory(conversationId);
+      if (epoch !== this.libraryEpoch) return;
+      if (this.activeConversationId !== conversationId) {
+        this.libraryLoading = false;
+        return;
+      }
+      const cutoff = this.historyClearedAt[conversationId];
+      const messages = [...new Map(scanned.messages.filter((item) => item.conversationId === conversationId).map((item) => [item.id, item])).values()];
+      const entries = visibleLibrary(messages.map((item) => toLibraryEntry(item)), conversationId, cutoff);
+      this.libraryCache.set(conversationId, { entries, messages, complete: scanned.complete });
+      this.library = entries;
+      this.libraryComplete = scanned.complete;
+      this.libraryLoading = false;
+      void this.warmLibraryPreviews(conversationId);
+    } catch (error) {
+      if (epoch !== this.libraryEpoch) return;
+      if (this.activeConversationId !== conversationId) {
+        this.libraryLoading = false;
+        return;
+      }
+      this.libraryLoading = false;
+      this.libraryError = this.auth.userFacingError(error);
+    }
+  }
+
+  private async warmLibraryPreviews(conversationId: string): Promise<void> {
+    const bag = this.libraryCache.get(conversationId);
+    if (!bag) return;
+    let warmed = 0;
+    for (const message of bag.messages) {
+      for (const file of message.attachments ?? []) {
+        if (warmed >= 12) return;
+        const bucket = file.mime === "image/gif" || file.mime.startsWith("image/") ? "image" : "";
+        if (!bucket || this.imagePreviews.has(file.id) || !file.key || !file.iv) continue;
+        warmed += 1;
+        try {
+          const bytes = await this.auth.downloadAttachment(file.id, file.key, file.iv);
+          if (this.libraryCache.get(conversationId) !== bag) return;
+          this.rememberImage(file.id, `data:${file.mime};base64,${Buffer.from(bytes).toString("base64")}`);
+          if (this.libraryConversationId === conversationId) this.pushState();
+        } catch {
+          // The tile stays as a labeled fallback when the preview cannot be opened.
+        }
+      }
+    }
+  }
+
+  private async revealMessage(messageId: string): Promise<void> {
+    const conversationId = this.activeConversationId;
+    if (!conversationId) return;
+    this.threadPane = "chat";
+    this.highlightMessageId = messageId;
+    this.libraryError = null;
+    let guard = 0;
+    while (!this.messages.some((item) => item.id === messageId) && this.messageHasMore && this.messageCursor && guard < 40) {
+      const page = await this.auth.loadOlderMessages(conversationId, this.messageCursor);
+      if (this.activeConversationId !== conversationId) return;
+      const incoming = visibleAfterClear(page.messages, this.historyClearedAt[conversationId]);
+      if (incoming.length > 0) this.messages = mergeHistory(this.messages, incoming);
+      this.messageCursor = incoming.length > 0 ? page.nextCursor : null;
+      this.messageHasMore = incoming.length > 0 && page.hasNext;
+      guard += 1;
+      if (incoming.length === 0) break;
+    }
+    if (this.activeConversationId !== conversationId) return;
+    if (!this.messages.some((item) => item.id === messageId)) {
+      this.error = "That message is no longer in this chat.";
+      this.highlightMessageId = null;
+    }
+  }
+
+  private async saveLibraryFile(messageId: string, attachmentId: string): Promise<void> {
+    const bag = this.activeConversationId ? this.libraryCache.get(this.activeConversationId) : undefined;
+    const message = bag?.messages.find((item) => item.id === messageId);
+    const file = message?.attachments?.find((item) => item.id === attachmentId);
+    if (!message || !file?.key || !file.iv) {
+      this.error = "That file is no longer in this chat.";
+      return;
+    }
+    try {
+      const bytes = await this.auth.downloadAttachment(file.id, file.key, file.iv);
+      await this.saveFile(file.name || "download", bytes);
+      this.notice = "File saved.";
+    } catch (error) {
+      this.error = this.auth.userFacingError(error);
+    }
+  }
+
+  private async refreshStories(): Promise<void> {
+    if (!this.auth.isAuthenticated() || !this.auth.loadStories) return;
+    const epoch = this.storyEpoch + 1;
+    this.storyEpoch = epoch;
+    const empty = this.storyTray.mine.length === 0 && this.storyTray.rings.length === 0;
+    this.storiesLoading = empty;
+    this.storiesError = null;
+    if (empty) this.pushState();
+    try {
+      const tray = await this.auth.loadStories();
+      if (epoch !== this.storyEpoch) return;
+      this.storyTray = tray;
+      this.storiesLoading = false;
+      this.storiesError = null;
+    } catch (error) {
+      if (epoch !== this.storyEpoch) return;
+      this.storiesLoading = false;
+      if (!isAuthenticationFailure(error) && this.auth.isAuthenticated()) {
+        this.storiesError = this.auth.userFacingError(error);
+      }
+    }
+  }
+
+  private storyById(storyId: string): StoryCard | undefined {
+    return this.storyTray.mine.find((story) => story.id === storyId)
+      ?? this.storyTray.rings.flatMap((ring) => ring.stories).find((story) => story.id === storyId);
+  }
+
+  private async publishStory(message: { clientStoryId: string; caption: string; textStyle: "plain" | "light" | "dark"; contentType: string; dataBase64: string }): Promise<void> {
+    const bytes = Buffer.from(message.dataBase64, "base64");
+    if (!bytes.length) {
+      this.error = "Choose an image or a short video.";
+      return;
+    }
+    const card = await this.auth.publishStory({
+      clientStoryId: message.clientStoryId,
+      caption: message.caption,
+      textStyle: message.textStyle,
+      contentType: message.contentType,
+      bytes,
+    });
+    this.storyTray = { ...this.storyTray, mine: [...this.storyTray.mine.filter((story) => story.id !== card.id), card] };
+    this.notice = "Story published.";
+    this.storyViewer = { ownerId: card.ownerId, storyId: card.id };
+    await this.loadStoryStage(card);
+  }
+
+  private async viewStory(storyId: string): Promise<void> {
+    const known = this.storyById(storyId);
+    const ownerId = known?.ownerId ?? this.storyViewer?.ownerId ?? "";
+    if (!ownerId) return;
+    this.storyViewer = { ownerId, storyId };
+    this.storyViewers = [];
+    if (known) await this.loadStoryStage(known);
+    if (known?.mine || this.recordedStoryViews.has(storyId)) return;
+    this.recordedStoryViews.add(storyId);
+    try {
+      const card = await this.auth.viewStory(storyId);
+      this.applyStoryCard(card);
+    } catch (error) {
+      this.recordedStoryViews.delete(storyId);
+      if (isAuthenticationFailure(error)) throw error;
+    }
+  }
+
+  private async loadStoryStage(story: StoryCard): Promise<void> {
+    const storyId = story.id;
+    try {
+      const bytes = await this.auth.storyMedia(storyId);
+      if (this.storyViewer?.storyId !== storyId) return;
+      this.storyStage = {
+        storyId,
+        mediaType: story.mediaType,
+        contentType: story.contentType,
+        dataUrl: `data:${story.contentType};base64,${Buffer.from(bytes).toString("base64")}`,
+        failed: false,
+      };
+    } catch (error) {
+      if (this.storyViewer?.storyId !== storyId) return;
+      if (isAuthenticationFailure(error)) throw error;
+      this.storyStage = {
+        storyId,
+        mediaType: story.mediaType,
+        contentType: story.contentType,
+        dataUrl: "",
+        failed: true,
+      };
+    }
+  }
+
+  private applyStoryCard(card: StoryCard): void {
+    const mine = this.storyTray.mine.map((story) => story.id === card.id ? card : story);
+    const rings = this.storyTray.rings.map((ring) => ({
+      ...ring,
+      stories: ring.stories.map((story) => story.id === card.id ? card : story),
+      unseen: ring.stories.some((story) => (story.id === card.id ? !card.viewed : !story.viewed)),
+    }));
+    this.storyTray = { mine, rings };
+  }
+
+  private dropStory(storyId: string): void {
+    this.storyTray = {
+      mine: this.storyTray.mine.filter((story) => story.id !== storyId),
+      rings: this.storyTray.rings
+        .map((ring) => ({ ...ring, stories: ring.stories.filter((story) => story.id !== storyId) }))
+        .filter((ring) => ring.stories.length > 0),
+    };
+    if (this.storyViewer?.storyId === storyId) {
+      this.storyViewer = null;
+      this.storyStage = null;
+      this.storyViewers = [];
+    }
+  }
+
+  private async reactToStory(storyId: string, emoji: string): Promise<void> {
+    const card = await this.auth.reactToStory(storyId, emoji);
+    this.applyStoryCard(card);
+  }
+
+  private async clearStoryReaction(storyId: string): Promise<void> {
+    const card = await this.auth.clearStoryReaction(storyId);
+    this.applyStoryCard(card);
+  }
+
+  private async deleteStory(storyId: string): Promise<void> {
+    await this.auth.deleteStory(storyId);
+    this.dropStory(storyId);
+    this.notice = "Story deleted.";
+  }
+
+  private async loadStoryViewers(storyId: string): Promise<void> {
+    const story = this.storyById(storyId);
+    if (!story?.mine) return;
+    this.storyViewers = await this.auth.storyViewers(storyId);
+  }
+
+  private async replyToStory(ownerId: string, storyId: string, text: string): Promise<void> {
+    const story = this.storyById(storyId);
+    const caption = story?.caption?.trim();
+    const prefix = caption ? `Reply to a story: ${caption.slice(0, 80)}` : "Reply to a story";
+    const opened = await this.auth.openConversation({ participantId: ownerId });
+    await this.auth.sendMessage(opened.conversation.id, `${prefix}\n${text.trim()}`);
+    this.notice = "Reply sent.";
+  }
+
   private contactFromBlockedUser(actorId?: string | null): boolean {
     if (!actorId) return false;
     return this.blockedUsers.some((user) => user.id === actorId) || this.hiddenPresence.has(actorId);
@@ -169,6 +454,11 @@ export class SessionFlow {
       else this.historyCache.set(conversationId, { messages, cursor: null, hasMore: false });
     }
     delete this.conversationPreviews[conversationId];
+    this.libraryCache.delete(conversationId);
+    if (this.libraryConversationId === conversationId) {
+      this.library = [];
+      this.libraryComplete = true;
+    }
     delete this.unreadByConversation[conversationId];
     this.unreadMessages = Object.values(this.unreadByConversation).reduce((sum, count) => sum + count, 0);
     this.pushState();
@@ -215,6 +505,7 @@ export class SessionFlow {
 
   private async openThread(message: { conversationId?: string; participantId?: string }): Promise<void> {
     if (!this.auth.isAuthenticated()) return;
+    this.threadPane = "chat";
     const cutoff = message.conversationId ? this.historyClearedAt[message.conversationId] : undefined;
     const cached = message.conversationId ? this.historyCache.get(message.conversationId) : undefined;
     const cachedMessages = cached ? visibleAfterClear(cached.messages, cutoff) : [];
@@ -360,6 +651,22 @@ export class SessionFlow {
       historyError: this.historyError,
       keyRecovery: this.keyRecovery,
       historyClearedAt: { ...this.historyClearedAt },
+      threadPane: this.threadPane,
+      libraryConversationId: this.libraryConversationId,
+      libraryLoading: this.libraryLoading,
+      libraryError: this.libraryError,
+      libraryComplete: this.libraryComplete,
+      highlightMessageId: this.highlightMessageId,
+      storiesLoading: this.storiesLoading,
+      storiesError: this.storiesError,
+      storyTray: this.storyTray,
+      storyViewer: this.storyViewer,
+      storyStage: this.storyStage,
+      storyViewers: this.storyViewers,
+      library: this.library.map((entry) => ({
+        ...entry,
+        files: entry.files.map((file) => ({ ...file, preview: this.imagePreviews.get(file.id) })),
+      })),
     };
   }
 
@@ -474,6 +781,13 @@ export class SessionFlow {
       }
       return;
     }
+    if (frame.type === "STORY_PUBLISHED" || frame.type === "STORY_DELETED") {
+      const data = frame.data;
+      const storyId = data && typeof data === "object" && "storyId" in data ? (data as { storyId?: unknown }).storyId : undefined;
+      if (frame.type === "STORY_DELETED" && typeof storyId === "string") this.dropStory(storyId);
+      void this.refreshStories();
+      return;
+    }
     if (frame.type === "HISTORY_CLEARED" || frame.type === "NOTIFICATIONS_CLEARED") {
       this.applyClearFrame(frame);
       return;
@@ -492,6 +806,7 @@ export class SessionFlow {
         this.toastSeq,
       );
       if (patch.messages) this.messages = patch.messages.map((item) => this.auth.displayMessage(item));
+      this.rememberLibraryMessage(this.auth.displayMessage(message));
       this.rememberPreview(message.conversationId, this.auth.displayMessage(message).displayText);
       if (patch.bumpConversation) {
         this.unreadByConversation[patch.bumpConversation] = (this.unreadByConversation[patch.bumpConversation] ?? 0) + 1;
@@ -555,6 +870,11 @@ export class SessionFlow {
       this.history = [this.screen];
     }
     if (next !== "user") this.history = [];
+    if (next !== "home") {
+      this.storyViewer = null;
+      this.storyStage = null;
+      this.storyViewers = [];
+    }
     this.screen = next;
     this.rememberVisibleRoute();
   }
@@ -611,6 +931,19 @@ export class SessionFlow {
     this.notificationsClearedAt = null;
     this.historyClearedAt = {};
     this.conversationPreviews = {};
+    this.threadPane = "chat";
+    this.library = [];
+    this.libraryConversationId = null;
+    this.libraryCache.clear();
+    this.highlightMessageId = null;
+    this.storyTray = { mine: [], rings: [] };
+    this.storiesLoading = false;
+    this.storiesError = null;
+    this.storyEpoch += 1;
+    this.storyViewer = null;
+    this.storyStage = null;
+    this.storyViewers = [];
+    this.recordedStoryViews.clear();
     this.toast = null;
     this.devices = [];
     this.blockedUsers = [];
@@ -946,6 +1279,7 @@ export class SessionFlow {
     this.keyRecovery = this.auth.prepareDeviceKeys
       ? await this.auth.prepareDeviceKeys()
       : (await this.auth.ensureDeviceKeys(), "ready");
+    void this.refreshStories();
   }
 
   async handleMessage(rawMessage: unknown): Promise<void> {
@@ -993,6 +1327,7 @@ export class SessionFlow {
         this.messageLock = "none";
       }
       this.show(message.destination, true);
+      if (message.destination === "home") void this.refreshStories();
       this.pushState();
       if (this.auth.isAuthenticated() && message.destination === "settings") {
         await this.run({ version: 1, type: "loadDevices" });
@@ -1560,6 +1895,48 @@ export class SessionFlow {
           this.notice = result.cleared === 0 ? "Notifications are already clear." : "Notifications cleared.";
           break;
         }
+        case "openLibrary":
+          await this.openLibrary(message.pane);
+          break;
+        case "closeLibrary":
+          this.threadPane = "chat";
+          this.highlightMessageId = null;
+          break;
+        case "revealMessage":
+          await this.revealMessage(message.messageId);
+          break;
+        case "saveLibraryFile":
+          await this.saveLibraryFile(message.messageId, message.attachmentId);
+          break;
+        case "refreshStories":
+          await this.refreshStories();
+          break;
+        case "closeStory":
+          this.storyViewer = null;
+          this.storyStage = null;
+          this.storyViewers = [];
+          break;
+        case "publishStory":
+          await this.publishStory(message);
+          break;
+        case "viewStory":
+          await this.viewStory(message.storyId);
+          break;
+        case "reactStory":
+          await this.reactToStory(message.storyId, message.emoji);
+          break;
+        case "clearStoryReaction":
+          await this.clearStoryReaction(message.storyId);
+          break;
+        case "deleteStory":
+          await this.deleteStory(message.storyId);
+          break;
+        case "loadStoryViewers":
+          await this.loadStoryViewers(message.storyId);
+          break;
+        case "replyToStory":
+          await this.replyToStory(message.ownerId, message.storyId, message.text);
+          break;
         case "clearChat": {
           const clearedAt = await this.auth.clearConversation(message.conversationId);
           this.applyHistoryClear(message.conversationId, clearedAt);

@@ -26,6 +26,7 @@ export interface ApiRequestOptions {
     readonly filename: string;
     readonly contentType: string;
     readonly bytes: Uint8Array;
+    readonly fields?: Readonly<Record<string, string>>;
   };
   readonly signal?: AbortSignal;
   readonly timeoutMs?: number;
@@ -80,6 +81,9 @@ export class ApiClient {
     }
     if (options.multipart) {
       const form = new FormData();
+      for (const [key, value] of Object.entries(options.multipart.fields ?? {})) {
+        form.append(key, value);
+      }
       const copy = new Uint8Array(options.multipart.bytes.byteLength);
       copy.set(options.multipart.bytes);
       form.append("file", new Blob([copy], { type: options.multipart.contentType }), options.multipart.filename);

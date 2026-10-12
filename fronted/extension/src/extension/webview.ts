@@ -16,6 +16,8 @@ import { attachmentCaption, fileKind, fileTypeLabel } from "./attachment-layout"
 import { EMOJI_CATEGORIES, GIFS, QUICK_REACTIONS, STICKERS } from "./media-catalog";
 import { dateSeparatorLabel, shouldLoadOlderHistory } from "./date-label";
 import { chatBlockMenuActionForState, chatMenuMarkup } from "./chat-menu";
+import { documentEntries, escapeHtml, highlightMatch, mediaEntries, searchEntries, sortByTime, type LibraryEntry } from "./conversation-library";
+import type { StoryCard, StoryRing, StoryViewer } from "../api/stories";
 import { TYPING_IDLE_MS, typingCommand } from "./typing-debounce";
 
 export interface HostState {
@@ -61,6 +63,19 @@ export interface HostState {
   readonly historyError: string | null;
   readonly keyRecovery?: "ready" | "needed" | "unavailable";
   readonly historyClearedAt?: Readonly<Record<string, string>>;
+  readonly threadPane?: "chat" | "search" | "media" | "docs";
+  readonly libraryConversationId?: string | null;
+  readonly libraryLoading?: boolean;
+  readonly libraryError?: string | null;
+  readonly libraryComplete?: boolean;
+  readonly highlightMessageId?: string | null;
+  readonly library?: readonly LibraryEntry[];
+  readonly storiesLoading?: boolean;
+  readonly storiesError?: string | null;
+  readonly storyTray?: { mine: StoryCard[]; rings: StoryRing[] };
+  readonly storyViewer?: { ownerId: string; storyId: string } | null;
+  readonly storyStage?: { storyId: string; mediaType: "IMAGE" | "VIDEO"; contentType: string; dataUrl: string; failed: boolean } | null;
+  readonly storyViewers?: readonly StoryViewer[];
 }
 
 export function emptyHostState(): HostState {
@@ -107,6 +122,19 @@ export function emptyHostState(): HostState {
     historyError: null,
     keyRecovery: "ready",
     historyClearedAt: {},
+    threadPane: "chat",
+    libraryConversationId: null,
+    libraryLoading: false,
+    libraryError: null,
+    libraryComplete: true,
+    highlightMessageId: null,
+    library: [],
+    storiesLoading: false,
+    storiesError: null,
+    storyTray: { mine: [], rings: [] },
+    storyViewer: null,
+    storyStage: null,
+    storyViewers: [],
   };
 }
 
@@ -117,7 +145,8 @@ export function renderWebview(webview: Webview, state: HostState): string {
     "default-src 'none'",
     `style-src 'nonce-${nonce}'`,
     `script-src 'nonce-${nonce}'`,
-    `img-src ${webview.cspSource} data:`,
+    `img-src ${webview.cspSource} data: blob:`,
+    "media-src data: blob:",
     "font-src 'none'",
     "connect-src 'none'",
     "frame-src 'none'",
@@ -283,7 +312,42 @@ export function renderWebview(webview: Webview, state: HostState): string {
   .thread-person { position: relative; display: flex; align-items: center; gap: 8px; min-width: 0; flex: 0 0 auto; }
   #thread-menu { margin-left: auto; }
   .note-actions { margin-left: auto; }
-  .menu-pop { position: absolute; top: calc(100% + 4px); right: 0; z-index: 6; min-width: 168px; display: grid; gap: 2px; padding: 6px; border-radius: 8px; background: var(--vscode-menu-background, var(--vscode-editorWidget-background)); color: var(--vscode-menu-foreground, var(--vscode-foreground)); border: 1px solid var(--vscode-menu-border, var(--vscode-panel-border)); box-shadow: 0 8px 24px color-mix(in srgb, var(--vscode-widget-shadow, #000) 28%, transparent); }
+  .menu-pop { position: absolute; top: calc(100% + 4px); right: 0; z-index: 6; min-width: 168px; max-height: min(320px, 70vh); overflow: auto; display: grid; gap: 2px; padding: 6px; border-radius: 8px; background: var(--vscode-menu-background, var(--vscode-editorWidget-background)); color: var(--vscode-menu-foreground, var(--vscode-foreground)); border: 1px solid var(--vscode-menu-border, var(--vscode-panel-border)); box-shadow: 0 8px 24px color-mix(in srgb, var(--vscode-widget-shadow, #000) 28%, transparent); }
+  .menu-pop .btn { display: flex; align-items: center; justify-content: flex-start; gap: 8px; }
+  .menu-ico { width: 14px; height: 14px; flex: 0 0 auto; }
+  #library { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 8px; }
+  #library-body { flex: 1 1 auto; min-height: 0; overflow: auto; }
+  .search-bar { display: flex; gap: 6px; align-items: center; }
+  .search-bar input { flex: 1; min-width: 0; }
+  .search-hit { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; }
+  .search-hit mark { background: var(--vscode-editor-findMatchHighlightBackground, var(--vscode-editor-selectionBackground)); color: inherit; }
+  .media-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 4px; overflow: auto; }
+  .media-tile { aspect-ratio: 1; overflow: hidden; border: 0; padding: 0; border-radius: 6px; background: var(--vscode-editorWidget-background); color: var(--vscode-foreground); display: grid; place-items: center; }
+  .media-tile img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .doc-row { display: flex; gap: 8px; align-items: center; text-align: left; min-width: 0; }
+  .doc-row .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .msg.flash { outline: 2px solid var(--vscode-focusBorder); outline-offset: 2px; }
+  .story-row { display: flex; align-items: center; gap: 4px; max-width: 100%; min-width: 0; }
+  .story-scroller { flex: 1; min-width: 0; overflow-x: auto; overflow-y: hidden; scroll-behavior: smooth; }
+  .story-items { display: flex; gap: 10px; width: max-content; padding: 4px 2px 8px; }
+  .story-tile { width: 72px; border: 0; background: transparent; color: inherit; display: grid; justify-items: center; gap: 4px; padding: 0; }
+  .story-ring { width: 56px; height: 56px; border-radius: 50%; padding: 2px; display: grid; place-items: center; }
+  .story-ring.unseen { background: linear-gradient(135deg, #f9ce34, #ee2a7b 55%, #6228d7); }
+  .story-ring.seen { background: var(--vscode-widget-border, var(--vscode-panel-border)); }
+  .story-ring.mine { background: var(--vscode-button-background); }
+  .story-avatar { width: 50px; height: 50px; border-radius: 50%; overflow: hidden; background: var(--vscode-editor-background); display: grid; place-items: center; position: relative; }
+  .story-plus { position: absolute; right: -2px; bottom: -2px; width: 16px; height: 16px; border-radius: 50%; background: var(--vscode-button-background); color: var(--vscode-button-foreground); font-size: 12px; line-height: 16px; }
+  .story-name { max-width: 72px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+  .story-skel { width: 56px; height: 56px; border-radius: 50%; background: var(--vscode-editorWidget-background); }
+  .story-overlay { position: fixed; inset: 0; z-index: 20; background: color-mix(in srgb, #000 72%, transparent); display: flex; align-items: center; justify-content: center; padding: 12px; }
+  .story-sheet { width: min(420px, 100%); max-height: 100%; overflow: auto; background: var(--vscode-editor-background); color: var(--vscode-foreground); border: 1px solid var(--vscode-panel-border); border-radius: 12px; padding: 12px; display: grid; gap: 8px; }
+  .story-stage { width: min(320px, 100%); aspect-ratio: 9 / 16; max-height: 62vh; margin: 0 auto; overflow: hidden; border-radius: 10px; background: #111; display: grid; place-items: center; }
+  .story-stage img, .story-stage video { max-width: 100%; max-height: 100%; object-fit: contain; }
+  .story-progress { display: flex; gap: 3px; }
+  .story-progress i { flex: 1; height: 2px; background: color-mix(in srgb, var(--vscode-foreground) 28%, transparent); }
+  .story-progress i.on { background: var(--vscode-foreground); }
+  .story-tile:focus-visible, .story-scroll:focus-visible, #story-close:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 2px; }
+  @media (prefers-reduced-motion: reduce) { .story-scroller { scroll-behavior: auto; } }
   .menu-pop .btn { width: 100%; justify-content: flex-start; text-align: left; }
   #thread-menu:focus-visible, #clear-notifications:focus-visible, .menu-pop .btn:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 2px; }
   .dialog h2 { margin: 0 0 6px; font-size: 16px; font-weight: 600; }
@@ -529,6 +593,14 @@ export function renderWebview(webview: Webview, state: HostState): string {
 
     <section data-screen="home" class="stack" hidden>
       <h1 id="home-title">Home</h1>
+      <div id="story-row" class="story-row">
+        <button class="btn quiet story-scroll" type="button" id="story-scroll-left" aria-label="Scroll stories backward">‹</button>
+        <div id="story-scroller" class="story-scroller" tabindex="0" aria-label="Stories">
+          <div id="story-items" class="story-items"></div>
+        </div>
+        <button class="btn quiet story-scroll" type="button" id="story-scroll-right" aria-label="Scroll stories forward">›</button>
+      </div>
+      <p class="muted" id="story-note"></p>
       <p class="muted" id="home-copy"></p>
       <div class="stats" id="home-stats"></div>
       <h2>Recent activity</h2>
@@ -602,6 +674,20 @@ export function renderWebview(webview: Webview, state: HostState): string {
         </div>
         <p class="muted" id="thread-connection" hidden>Reconnecting...</p>
         <div id="message-list"></div>
+        <section id="library" hidden>
+          <div class="thread-head">
+            <button class="btn quiet" type="button" id="library-back">← Chat</button>
+            <strong id="library-title">Search</strong>
+          </div>
+          <div class="search-bar" id="search-bar">
+            <input id="search-input" type="search" maxlength="80" placeholder="Search this chat" aria-label="Search this chat" autocomplete="off">
+            <button class="btn quiet" type="button" id="search-clear" aria-label="Clear search">Clear</button>
+            <button class="btn quiet" type="button" id="search-prev" aria-label="Previous match">↑</button>
+            <button class="btn quiet" type="button" id="search-next" aria-label="Next match">↓</button>
+          </div>
+          <p class="muted" id="library-status"></p>
+          <div id="library-body" class="stack"></div>
+        </section>
         <div id="emoji-picker" class="emoji-picker" role="dialog" aria-label="Choose an emoji" hidden>
           <input id="emoji-search" type="search" maxlength="32" placeholder="Search emoji" aria-label="Search emoji" autocomplete="off">
           <div id="emoji-cats" class="emoji-cats"></div>
@@ -640,6 +726,54 @@ export function renderWebview(webview: Webview, state: HostState): string {
           <input id="file-input" type="file" multiple hidden>
         </form>
         <div id="lightbox" class="lightbox" hidden></div>
+        <section id="story-composer" class="story-overlay" hidden>
+          <form id="story-form" class="story-sheet">
+            <div class="thread-head">
+              <strong>New story</strong>
+              <button class="btn quiet" type="button" id="story-cancel">Cancel</button>
+            </div>
+            <div id="story-preview" class="story-stage muted">Choose a photo or a video up to 15 seconds.</div>
+            <div class="row">
+              <button class="btn" type="button" id="story-pick">Choose media</button>
+              <button class="btn quiet" type="button" id="story-clear-media" hidden>Remove</button>
+            </div>
+            <input id="story-file" type="file" accept="image/jpeg,image/png,image/gif,image/webp,video/mp4,video/webm" hidden>
+            <label>Caption<input id="story-caption" maxlength="160" placeholder="Say something"></label>
+            <div class="row" role="radiogroup" aria-label="Caption style">
+              <label><input type="radio" name="story-style" value="plain" checked> Plain</label>
+              <label><input type="radio" name="story-style" value="light"> Light</label>
+              <label><input type="radio" name="story-style" value="dark"> Dark</label>
+            </div>
+            <p class="muted" id="story-form-error" hidden></p>
+            <button class="btn primary" type="submit" id="story-publish">Share story</button>
+          </form>
+        </section>
+        <section id="story-viewer" class="story-overlay" hidden>
+          <div class="story-sheet story-player" role="dialog" aria-label="Story">
+            <div id="story-progress" class="story-progress"></div>
+            <div class="thread-head">
+              <strong id="story-who"></strong>
+              <span class="muted" id="story-when"></span>
+              <button class="btn quiet" type="button" id="story-close" aria-label="Close story">Close</button>
+            </div>
+            <div id="story-media" class="story-stage"></div>
+            <p id="story-caption-view"></p>
+            <div class="row" id="story-reactions"></div>
+            <form id="story-reply" class="row" hidden>
+              <input id="story-reply-text" maxlength="2000" placeholder="Reply privately" aria-label="Reply to story">
+              <button class="btn" type="submit">Send</button>
+            </form>
+            <div class="row" id="story-owner-tools" hidden>
+              <button class="btn quiet" type="button" id="story-viewers-btn">Viewers</button>
+              <button class="btn quiet danger" type="button" id="story-delete">Delete</button>
+            </div>
+            <div id="story-viewer-list" class="stack" hidden></div>
+            <div class="story-nav">
+              <button class="btn quiet" type="button" id="story-prev" aria-label="Previous story">Previous</button>
+              <button class="btn quiet" type="button" id="story-next" aria-label="Next story">Next</button>
+            </div>
+          </div>
+        </section>
       </div>
     </section>
 
@@ -744,7 +878,7 @@ export function renderWebview(webview: Webview, state: HostState): string {
         <button class="btn quiet" type="button" data-settings="menu">Settings</button>
         <h1>About</h1>
         <p>DevConnect</p>
-        <p class="muted" id="about-version">Version 0.4.56</p>
+        <p class="muted" id="about-version">Version 0.4.58</p>
         <p class="muted">A developer network inside Visual Studio Code. Messages stay encrypted on your devices.</p>
       </div>
     </section>
@@ -817,6 +951,13 @@ export function renderWebview(webview: Webview, state: HostState): string {
   let typingOn = false;
   let typingStopTimer = 0;
   const typingCommand = ${typingCommand.toString()};
+  const chatMenuMarkup = ${chatMenuMarkup.toString()};
+  const searchEntries = ${searchEntries.toString()};
+  const mediaEntries = ${mediaEntries.toString()};
+  const documentEntries = ${documentEntries.toString()};
+  const highlightMatch = ${highlightMatch.toString()};
+  const sortByTime = ${sortByTime.toString()};
+  const escapeHtml = ${escapeHtml.toString()};
   const TYPING_IDLE_MS = ${TYPING_IDLE_MS};
   const chatActivity = ${chatActivity.toString()};
   let settingsPane = "menu";
@@ -966,6 +1107,238 @@ export function renderWebview(webview: Webview, state: HostState): string {
   let pendingFiles = [];
   let attachMenuOpen = false;
   let threadMenuOpen = false;
+  let libraryQuery = "";
+  let libraryQueryTimer = 0;
+  let docOrder = "newest";
+  let searchIndex = 0;
+  let lastHighlight = "";
+  let trackedLibraryChat = "";
+  function moveSearch(step) {
+    const hits = document.querySelectorAll("#library-body .search-hit");
+    if (!hits.length) return;
+    searchIndex = (searchIndex + step + hits.length) % hits.length;
+    paintLibrary();
+    const current = document.querySelectorAll("#library-body .search-hit")[searchIndex];
+    if (current && current.scrollIntoView) current.scrollIntoView({ block: "nearest" });
+  }
+  function paintLibrary() {
+    const chatId = state.activeConversationId || "";
+    if (chatId !== trackedLibraryChat) {
+      trackedLibraryChat = chatId;
+      libraryQuery = "";
+      searchIndex = 0;
+    }
+    const pane = state.threadPane || "chat";
+    const title = document.getElementById("library-title");
+    const bar = document.getElementById("search-bar");
+    const status = document.getElementById("library-status");
+    const body = document.getElementById("library-body");
+    if (title) title.textContent = pane === "media" ? "Media" : pane === "docs" ? "Docs" : "Search";
+    if (bar) bar.hidden = pane !== "search";
+    const input = document.getElementById("search-input");
+    if (input instanceof HTMLInputElement && document.activeElement !== input && input.value !== libraryQuery) input.value = libraryQuery;
+    if (!body || !status) return;
+    body.className = pane === "media" ? "media-grid" : "stack";
+    const same = state.libraryConversationId && state.libraryConversationId === state.activeConversationId;
+    const entries = same ? (state.library || []) : [];
+    if (!same && pane !== "chat") {
+      status.textContent = "Loading this chat…";
+      body.innerHTML = "";
+      return;
+    }
+    if (state.libraryLoading) {
+      status.textContent = "Loading this chat…";
+      body.innerHTML = "";
+      return;
+    }
+    if (state.libraryError) {
+      status.textContent = "";
+      body.innerHTML = '<div class="history-note"><span>' + esc(state.libraryError) + '</span> <button class="btn" type="button" data-act="library-retry" data-id="library">Try again</button></div>';
+      return;
+    }
+    const partial = same && state.libraryComplete === false ? " Older messages were not included." : "";
+    if (pane === "search") {
+      const hits = searchEntries(entries, libraryQuery);
+      if (!libraryQuery.trim()) {
+        status.textContent = partial ? "Type to search this chat." + partial : "Type to search messages, captions, and file names in this chat.";
+        body.innerHTML = "";
+        return;
+      }
+      status.textContent = (hits.length === 1 ? "1 match" : hits.length + " matches") + partial;
+      if (!hits.length) {
+        body.innerHTML = '<p class="muted">No messages match that search.</p>';
+        return;
+      }
+      if (searchIndex >= hits.length) searchIndex = 0;
+      const whoFor = (senderId) => state.user && senderId === state.user.id ? "You" : (document.getElementById("thread-name").textContent || "Developer");
+      body.innerHTML = hits.map((entry, index) => {
+        const preview = entry.text || (entry.files[0] && entry.files[0].name) || "Message";
+        return '<button class="btn quiet search-hit' + (index === searchIndex ? " flash" : "") + '" type="button" data-act="reveal-message" data-id="' + esc(entry.id) + '"><strong>' + esc(whoFor(entry.senderId)) + '</strong><span>' + highlightMatch(preview.slice(0, 180), libraryQuery) + '</span><span class="muted">' + esc(when(entry.createdAt)) + '</span></button>';
+      }).join("");
+      return;
+    }
+    if (pane === "media") {
+      const items = mediaEntries(entries);
+      status.textContent = items.length ? (items.length + (items.length === 1 ? " item" : " items") + partial) : "";
+      if (!items.length) {
+        body.innerHTML = '<p class="muted">No photos, videos, or GIFs in this chat yet.</p>';
+        return;
+      }
+      body.innerHTML = items.map((entry) => {
+        const visual = (entry.files || []).find((file) => file.bucket !== "file");
+        const label = entry.mediaKind === "gif" ? "GIF" : entry.mediaKind === "sticker" ? "Sticker" : (visual && visual.bucket === "video" ? "Video" : visual && visual.bucket === "gif" ? "GIF" : "Photo");
+        const preview = visual && typeof visual.preview === "string" && visual.preview.indexOf("data:image/") === 0
+          ? '<img src="' + visual.preview + '" alt="' + esc(visual.name || label) + '">'
+          : '<span>' + esc(label) + '</span>';
+        const act = visual && visual.preview ? "open-library-preview" : "reveal-message";
+        return '<button class="media-tile" type="button" data-act="' + act + '" data-id="' + esc(entry.id) + '" data-name="' + esc((visual && visual.name) || entry.text || label) + '" aria-label="' + esc(label) + '">' + preview + '</button>';
+      }).join("");
+      return;
+    }
+    if (pane === "docs") {
+      const docs = sortByTime(documentEntries(entries).flatMap((entry) => (entry.files || []).filter((file) => file.bucket === "file").map((file) => ({
+        id: file.id, name: file.name, size: file.size, messageId: entry.id, senderId: entry.senderId, createdAt: entry.createdAt,
+      }))), docOrder);
+      status.textContent = docs.length ? (docs.length + (docs.length === 1 ? " file" : " files") + partial) : "";
+      const sort = '<div class="row"><button class="btn quiet" type="button" data-act="docs-sort" data-id="newest">Newest</button><button class="btn quiet" type="button" data-act="docs-sort" data-id="oldest">Oldest</button></div>';
+      body.innerHTML = sort + (docs.length ? docs.map((file) => {
+        const who = state.user && file.senderId === state.user.id ? "You" : (document.getElementById("thread-name").textContent || "Developer");
+        return '<div class="doc-row"><button class="btn quiet doc-row" type="button" data-act="save-library" data-id="' + esc(file.messageId) + '" data-file="' + esc(file.id) + '"><span class="name">' + esc(file.name) + '</span><span class="muted">' + esc(fileSize(file.size)) + " · " + esc(who) + " · " + esc(when(file.createdAt)) + '</span></button><button class="btn quiet" type="button" data-act="reveal-message" data-id="' + esc(file.messageId) + '">Show</button></div>';
+      }).join("") : '<p class="muted">No documents or files in this chat yet.</p>');
+    }
+  }
+  let storyFile = null;
+  let storyTimer = 0;
+  let storyPaused = false;
+  let storySubmitLock = false;
+  const storyEmojis = ["❤️", "😂", "😮", "😢", "🔥", "👍"];
+  function storyPlaylist() {
+    const tray = state.storyTray || { mine: [], rings: [] };
+    const items = (tray.mine || []).slice();
+    (tray.rings || []).forEach((ring) => (ring.stories || []).forEach((story) => items.push(story)));
+    return items;
+  }
+  function moveStory(step) {
+    const items = storyPlaylist();
+    const index = items.findIndex((story) => state.storyViewer && story.id === state.storyViewer.storyId);
+    const next = items[index + step];
+    if (!next) {
+      vscode.postMessage({ version: 1, type: "closeStory" });
+      return;
+    }
+    vscode.postMessage({ version: 1, type: "viewStory", storyId: next.id });
+  }
+  function armStoryTimer() {
+    window.clearTimeout(storyTimer);
+    storyTimer = 0;
+    const viewer = state.storyViewer;
+    const stage = state.storyStage;
+    if (!viewer || storyPaused || !stage || stage.failed || stage.storyId !== viewer.storyId || stage.mediaType !== "IMAGE") return;
+    if (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    storyTimer = window.setTimeout(() => moveStory(1), 5000);
+  }
+  function paintStoryViewer() {
+    const overlay = document.getElementById("story-viewer");
+    const open = !!(state.storyViewer && state.authenticated);
+    if (overlay) overlay.hidden = !open;
+    if (!open) {
+      window.clearTimeout(storyTimer);
+      storyTimer = 0;
+      return;
+    }
+    const items = storyPlaylist();
+    const current = items.find((story) => story.id === state.storyViewer.storyId) || null;
+    const ownerStories = items.filter((story) => current && story.ownerId === current.ownerId);
+    const progress = document.getElementById("story-progress");
+    if (progress) {
+      const index = ownerStories.findIndex((story) => current && story.id === current.id);
+      progress.innerHTML = ownerStories.map((story, position) => '<i class="' + (position <= index ? "on" : "") + '"></i>').join("");
+    }
+    const who = document.getElementById("story-who");
+    const person = (state.storyTray && state.storyTray.rings || []).find((ring) => current && ring.user.id === current.ownerId);
+    if (who) who.textContent = current && current.mine ? "Your story" : (person && (person.user.displayName || person.user.username)) || "Story";
+    const whenLabel = document.getElementById("story-when");
+    if (whenLabel) whenLabel.textContent = current ? when(current.createdAt) : "";
+    const caption = document.getElementById("story-caption-view");
+    if (caption) {
+      caption.textContent = current && current.caption ? current.caption : "";
+      caption.className = current && current.textStyle ? current.textStyle : "plain";
+    }
+    const media = document.getElementById("story-media");
+    const stage = state.storyStage;
+    const key = stage && current && stage.storyId === current.id ? stage.storyId + ":" + (stage.failed ? "fail" : stage.dataUrl.length) : "loading";
+    if (media && media.getAttribute("data-story") !== key) {
+      media.setAttribute("data-story", key);
+      if (!stage || !current || stage.storyId !== current.id) media.innerHTML = '<span class="muted">Loading story…</span>';
+      else if (stage.failed) media.innerHTML = '<span class="muted">This story could not be opened.</span>';
+      else if (stage.mediaType === "VIDEO") media.innerHTML = '<video src="' + esc(stage.dataUrl) + '" playsinline></video>';
+      else media.innerHTML = '<img src="' + esc(stage.dataUrl) + '" alt="' + esc(current.caption || "Story") + '">';
+      const video = media.querySelector("video");
+      if (video) {
+        video.addEventListener("ended", () => { if (!storyPaused) moveStory(1); });
+        const started = video.play();
+        if (started && started.catch) started.catch(() => undefined);
+      }
+    }
+    const reply = document.getElementById("story-reply");
+    const tools = document.getElementById("story-owner-tools");
+    if (reply) reply.hidden = !current || current.mine;
+    if (tools) tools.hidden = !current || !current.mine;
+    const reactions = document.getElementById("story-reactions");
+    if (reactions) {
+      reactions.hidden = !current || current.mine;
+      reactions.innerHTML = storyEmojis.map((emoji) => '<button class="btn quiet' + (current && current.myReaction === emoji ? " primary" : "") + '" type="button" data-act="react-story" data-id="' + esc(current ? current.id : "") + '" data-emoji="' + emoji + '" aria-label="React ' + emoji + '">' + emoji + '</button>').join("");
+    }
+    const list = document.getElementById("story-viewer-list");
+    if (list && current && current.mine) {
+      const people = state.storyViewers || [];
+      list.innerHTML = people.length
+        ? people.map((person) => '<span>' + esc(person.displayName || person.username) + ' · ' + esc(when(person.viewedAt)) + '</span>').join("")
+        : '<span class="muted">' + (current.viewCount ? current.viewCount + ' views' : 'No views yet') + '</span>';
+    }
+    armStoryTimer();
+  }
+  function paintStories() {
+    const items = document.getElementById("story-items");
+    const note = document.getElementById("story-note");
+    if (!items || !note) return;
+    const tray = state.storyTray || { mine: [], rings: [] };
+    const mine = tray.mine || [];
+    if (state.storiesLoading && !mine.length && !(tray.rings || []).length) {
+      items.innerHTML = '<div class="story-skel"></div><div class="story-skel"></div><div class="story-skel"></div>';
+      note.textContent = "";
+      paintStoryViewer();
+      return;
+    }
+    const self = state.user;
+    const tiles = ['<button class="story-tile" type="button" data-act="' + (mine.length ? "open-story" : "add-story") + '" data-id="' + esc(self ? self.id : "me") + '" data-story="' + esc(mine[0] ? mine[0].id : "") + '"><span class="story-ring mine"><span class="story-avatar">' + avatarMarkup(self, "md") + (mine.length ? "" : '<span class="story-plus" aria-hidden="true">+</span>') + '</span></span><span class="story-name">Your story</span></button>'];
+    if (mine.length) tiles.push('<button class="story-tile" type="button" data-act="add-story" data-id="add-story"><span class="story-ring mine"><span class="story-avatar"><span class="story-plus" aria-hidden="true">+</span></span></span><span class="story-name">Add</span></button>');
+    (tray.rings || []).forEach((ring) => {
+      const first = (ring.stories || [])[0];
+      const presence = state.presenceByUser && state.presenceByUser[ring.user.id];
+      const online = presence && presence.status === "ONLINE" ? '<span class="presence" aria-label="Online"></span>' : "";
+      tiles.push('<button class="story-tile" type="button" data-act="open-story" data-id="' + esc(ring.user.id) + '" data-story="' + esc(first ? first.id : "") + '"><span class="story-ring ' + (ring.unseen ? "unseen" : "seen") + '"><span class="story-avatar">' + avatarMarkup(ring.user, "md") + online + '</span></span><span class="story-name">' + esc(ring.user.displayName || ring.user.username) + '</span></button>');
+    });
+    items.innerHTML = tiles.join("");
+    note.textContent = state.storiesError
+      ? state.storiesError
+      : (tray.rings || []).length ? "" : "Share a moment with your connections.";
+    const composer = document.getElementById("story-composer");
+    if (composer && state.storyViewer) composer.hidden = true;
+    const formError = document.getElementById("story-form-error");
+    if (formError && composer && !composer.hidden && state.error) {
+      formError.hidden = false;
+      formError.textContent = state.error;
+      storySubmitLock = false;
+    }
+    paintStoryViewer();
+  }
+  function openStoryComposer() {
+    const composer = document.getElementById("story-composer");
+    const error = document.getElementById("story-form-error");
+    if (composer) composer.hidden = false;
+    if (error) { error.hidden = true; error.textContent = ""; }
+  }
   function fileSize(size) {
     const value = Number(size) || 0;
     if (value < 1024) return value + " B";
@@ -1067,6 +1440,7 @@ export function renderWebview(webview: Webview, state: HostState): string {
     const hour = new Date().getHours();
     const hello = hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
     document.getElementById("home-title").textContent = state.user ? (hello + ", " + (state.user.displayName || state.user.username)) : "Home";
+    paintStories();
     document.getElementById("home-copy").textContent = "What's happening in your developer network?";
     document.getElementById("home-stats").innerHTML = state.user
       ? '<div><strong>' + (state.friends || []).length + '</strong><span class="muted">Friends</span></div><div><strong>' + (state.incomingRequests || []).length + '</strong><span class="muted">Requests</span></div><div><strong>' + (state.conversations || []).length + '</strong><span class="muted">Chats</span></div>'
@@ -1164,25 +1538,23 @@ export function renderWebview(webview: Webview, state: HostState): string {
     const menuMode = !otherId || (state.user && otherId === state.user.id) ? "none" : iBlocked ? "unblock" : "block";
     if (threadPop && threadPop.getAttribute("data-mode") !== menuMode) {
       threadPop.setAttribute("data-mode", menuMode);
-      const clearItem = '<button class="btn quiet danger" type="button" data-act="clear-chat" role="menuitem">Clear chat</button>';
-      const blockItem = menuMode === "unblock"
-        ? '<button class="btn quiet" type="button" data-act="menu-unblock" role="menuitem">Unblock user</button>'
-        : menuMode === "block"
-          ? '<button class="btn quiet danger" type="button" data-act="menu-block" role="menuitem">Block user</button>'
-          : "";
-      threadPop.innerHTML = clearItem + blockItem;
+      threadPop.innerHTML = chatMenuMarkup(menuMode === "unblock" ? "unblock" : menuMode === "block" ? "block" : null);
     }
     if (threadPop) threadPop.hidden = !threadMenuOpen;
     const threadBlock = document.getElementById("thread-block");
     const messageForm = document.getElementById("message-form");
+    const pane = state.threadPane || "chat";
+    const libraryPanel = document.getElementById("library");
+    if (libraryPanel) libraryPanel.hidden = pane === "chat";
     if (threadBlock && messageForm) {
-      threadBlock.hidden = lock === "none";
-      messageForm.hidden = lock !== "none";
+      threadBlock.hidden = pane !== "chat" || lock === "none";
+      messageForm.hidden = pane !== "chat" || lock !== "none";
       threadBlock.innerHTML = lock === "blocked-me"
         ? "This conversation is unavailable.<br>You can't message this user."
         : 'You blocked this user. <button class="btn" type="button" data-act="unblock" data-id="' + esc(otherId || "") + '" data-name="' + esc(person.username || person.name) + '">Unblock</button>';
     }
     const list = document.getElementById("message-list");
+    if (list) list.hidden = pane !== "chat";
     const previousTop = list.scrollTop;
     const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 48;
     const ordered = (state.messages || []).slice().reverse();
@@ -1292,7 +1664,8 @@ export function renderWebview(webview: Webview, state: HostState): string {
         ? '<div class="react-bar" role="toolbar" aria-label="Quick reactions">' + quickReactions.map((emoji) => '<button class="btn' + ((groups[emoji] || []).indexOf(selfId) >= 0 ? " mine" : "") + '" type="button" data-act="react" data-id="' + esc(m.id) + '" data-emoji="' + esc(emoji) + '" aria-label="React with ' + esc(emoji) + '">' + emoji + '</button>').join("") + '<button class="btn" type="button" data-act="emoji-picker" data-id="' + esc(m.id) + '" aria-label="More emoji">☺</button></div>'
         : "";
       const media = !deleted && ((m.attachments || []).length || m.media) ? " media" : "";
-      return separator + '<div class="msg ' + (mine ? "mine" : "theirs") + (failed ? " failed" : "") + (deleted ? " deleted" : "") + (m.sealed ? " sealed" : "") + (reactFor === m.id ? " react-open" : "") + media + '">' + reactBar + (deleted ? "" : visual + files) + shownBody + (reactButtons ? '<div class="react-row">' + reactButtons + '</div>' : "") + '<div class="msg-meta">' + esc(clock(m.createdAt)) + receipt + actions + '</div>' + menu + (failed ? '<div class="msg-meta">' + esc(m.sendError || "Message failed to send.") + '</div>' + retry + retryFiles : "") + '</div>';
+      const flash = state.highlightMessageId && state.highlightMessageId === m.id ? " flash" : "";
+      return separator + '<div class="msg ' + (mine ? "mine" : "theirs") + (failed ? " failed" : "") + (deleted ? " deleted" : "") + (m.sealed ? " sealed" : "") + (reactFor === m.id ? " react-open" : "") + media + flash + '" data-msg-id="' + esc(m.id) + '">' + reactBar + (deleted ? "" : visual + files) + shownBody + (reactButtons ? '<div class="react-row">' + reactButtons + '</div>' : "") + '<div class="msg-meta">' + esc(clock(m.createdAt)) + receipt + actions + '</div>' + menu + (failed ? '<div class="msg-meta">' + esc(m.sendError || "Message failed to send.") + '</div>' + retry + retryFiles : "") + '</div>';
       } catch (ignored) {
         return '<div class="msg">' + esc(m && m.displayText ? m.displayText : "Message") + '</div>';
       }
@@ -1320,6 +1693,13 @@ export function renderWebview(webview: Webview, state: HostState): string {
     }
     lastMessageCount = ordered.length;
     lastNewestId = newestId;
+    if (!state.highlightMessageId) lastHighlight = "";
+    if (state.highlightMessageId && state.highlightMessageId !== lastHighlight) {
+      lastHighlight = state.highlightMessageId;
+      const target = list.querySelector('[data-msg-id="' + String(state.highlightMessageId).replace(/"/g, "") + '"]');
+      if (target && target.scrollIntoView) target.scrollIntoView({ block: "center" });
+    }
+    paintLibrary();
     if (!state.historyLoading) olderRequestArmed = true;
     const jump = document.getElementById("jump-latest");
     jump.hidden = heldNew === 0 || !state.activeConversationId;
@@ -1533,6 +1913,62 @@ export function renderWebview(webview: Webview, state: HostState): string {
       }
       return;
     }
+    if (act === "add-story") {
+      openStoryComposer();
+      return;
+    }
+    if (act === "open-story") {
+      const storyId = target.getAttribute("data-story") || "";
+      if (storyId) vscode.postMessage({ version: 1, type: "viewStory", storyId: storyId });
+      return;
+    }
+    if (act === "react-story") {
+      const emoji = target.getAttribute("data-emoji") || "";
+      const current = storyPlaylist().find((story) => story.id === id);
+      if (!id || !emoji) return;
+      vscode.postMessage(current && current.myReaction === emoji
+        ? { version: 1, type: "clearStoryReaction", storyId: id }
+        : { version: 1, type: "reactStory", storyId: id, emoji: emoji });
+      return;
+    }
+    if (act === "menu-search" || act === "menu-media" || act === "menu-docs") {
+      threadMenuOpen = false;
+      apply(state);
+      const pane = act === "menu-media" ? "media" : act === "menu-docs" ? "docs" : "search";
+      vscode.postMessage({ version: 1, type: "openLibrary", pane: pane });
+      return;
+    }
+    if (act === "library-retry") {
+      const pane = state.threadPane === "media" || state.threadPane === "docs" ? state.threadPane : "search";
+      vscode.postMessage({ version: 1, type: "openLibrary", pane: pane });
+      return;
+    }
+    if (act === "reveal-message") {
+      if (id) vscode.postMessage({ version: 1, type: "revealMessage", messageId: id });
+      return;
+    }
+    if (act === "save-library") {
+      const fileId = target.getAttribute("data-file") || "";
+      if (id && fileId) vscode.postMessage({ version: 1, type: "saveLibraryFile", messageId: id, attachmentId: fileId });
+      return;
+    }
+    if (act === "docs-sort") {
+      docOrder = id === "oldest" ? "oldest" : "newest";
+      paintLibrary();
+      return;
+    }
+    if (act === "open-library-preview") {
+      const image = target.querySelector("img");
+      const src = image instanceof HTMLImageElement ? image.getAttribute("src") || "" : "";
+      const box = document.getElementById("lightbox");
+      if (box && src.indexOf("data:image/") === 0) {
+        box.hidden = false;
+        box.innerHTML = '<div class="viewer" role="dialog" aria-label="Media preview"><div class="viewer-top"><span class="muted">' + esc(target.getAttribute("data-name") || "Media") + '</span><button class="btn quiet" type="button" data-act="close-preview" data-id="preview">Close</button></div><img src="' + esc(src) + '" alt="' + esc(target.getAttribute("data-name") || "Media") + '" data-act="zoom-preview" data-id="preview"><div class="viewer-bar"><button class="btn" type="button" data-act="reveal-message" data-id="' + esc(id) + '">Show in chat</button></div></div>';
+      } else if (id) {
+        vscode.postMessage({ version: 1, type: "revealMessage", messageId: id });
+      }
+      return;
+    }
     if (act === "clear-chat") {
       threadMenuOpen = false;
       apply(state);
@@ -1742,6 +2178,144 @@ export function renderWebview(webview: Webview, state: HostState): string {
     vscode.postMessage({ version: 1, type: "back" });
   });
   document.getElementById("thread-back").addEventListener("click", () => vscode.postMessage({ version: 1, type: "closeThread" }));
+  document.getElementById("library-back").addEventListener("click", () => vscode.postMessage({ version: 1, type: "closeLibrary" }));
+  document.getElementById("story-scroll-left").addEventListener("click", () => {
+    const scroller = document.getElementById("story-scroller");
+    if (scroller) scroller.scrollBy({ left: -180 });
+  });
+  document.getElementById("story-scroll-right").addEventListener("click", () => {
+    const scroller = document.getElementById("story-scroller");
+    if (scroller) scroller.scrollBy({ left: 180 });
+  });
+  document.getElementById("story-scroller").addEventListener("keydown", (event) => {
+    if (event.key === "ArrowRight" || event.key === "ArrowLeft") {
+      event.preventDefault();
+      document.getElementById("story-scroller").scrollBy({ left: event.key === "ArrowRight" ? 180 : -180 });
+    }
+  });
+  document.getElementById("story-cancel").addEventListener("click", () => { document.getElementById("story-composer").hidden = true; });
+  document.getElementById("story-pick").addEventListener("click", () => document.getElementById("story-file").click());
+  document.getElementById("story-clear-media").addEventListener("click", () => {
+    storyFile = null;
+    const preview = document.getElementById("story-preview");
+    if (preview) preview.textContent = "Choose a photo or a video up to 15 seconds.";
+    document.getElementById("story-clear-media").hidden = true;
+  });
+  document.getElementById("story-file").addEventListener("change", async (event) => {
+    const input = event.target;
+    const file = input instanceof HTMLInputElement && input.files ? input.files[0] : undefined;
+    if (input instanceof HTMLInputElement) input.value = "";
+    const error = document.getElementById("story-form-error");
+    if (!file) return;
+    const allowed = ["image/jpeg", "image/png", "image/gif", "image/webp", "video/mp4", "video/webm"];
+    const video = file.type.indexOf("video/") === 0;
+    const limit = video ? 8388608 : 5242880;
+    if (allowed.indexOf(file.type) < 0 || file.size <= 0 || file.size > limit) {
+      if (error) { error.hidden = false; error.textContent = "Use a JPEG, PNG, GIF, WebP, MP4, or WebM within the size limit."; }
+      return;
+    }
+    if (video) {
+      const duration = await new Promise((resolve) => {
+        const url = URL.createObjectURL(file);
+        const probe = document.createElement("video");
+        probe.preload = "metadata";
+        probe.onloadedmetadata = () => { const value = probe.duration; URL.revokeObjectURL(url); resolve(value); };
+        probe.onerror = () => { URL.revokeObjectURL(url); resolve(NaN); };
+        probe.src = url;
+      });
+      if (!(duration > 0) || duration > 15) {
+        if (error) { error.hidden = false; error.textContent = "Videos must be 15 seconds or shorter."; }
+        return;
+      }
+    }
+    storyFile = file;
+    if (error) error.hidden = true;
+    const preview = document.getElementById("story-preview");
+    const url = URL.createObjectURL(file);
+    if (preview) preview.innerHTML = video ? '<video src="' + url + '" controls></video>' : '<img src="' + url + '" alt="Story preview">';
+    document.getElementById("story-clear-media").hidden = false;
+  });
+  document.getElementById("story-form").addEventListener("submit", (event) => {
+    event.preventDefault();
+    const error = document.getElementById("story-form-error");
+    if (!storyFile || storySubmitLock || state.busy) {
+      if (error && !storyFile) { error.hidden = false; error.textContent = "Choose an image or a short video."; }
+      return;
+    }
+    storySubmitLock = true;
+    const style = document.querySelector('input[name="story-style"]:checked');
+    const caption = document.getElementById("story-caption");
+    const reader = new FileReader();
+    reader.onload = () => {
+      const raw = typeof reader.result === "string" ? reader.result : "";
+      const data = raw.indexOf(",") >= 0 ? raw.split(",")[1] : "";
+      const clientStoryId = ("story" + Date.now().toString(36) + Math.random().toString(36).slice(2, 10)).replace(/[^A-Za-z0-9_-]/g, "").slice(0, 64);
+      vscode.postMessage({
+        version: 1,
+        type: "publishStory",
+        clientStoryId: clientStoryId,
+        caption: caption instanceof HTMLInputElement ? caption.value : "",
+        textStyle: style instanceof HTMLInputElement ? style.value : "plain",
+        contentType: storyFile.type,
+        dataBase64: data,
+      });
+    };
+    reader.onerror = () => {
+      storySubmitLock = false;
+      if (error) { error.hidden = false; error.textContent = "That file could not be read."; }
+    };
+    reader.readAsDataURL(storyFile);
+  });
+  document.getElementById("story-close").addEventListener("click", () => vscode.postMessage({ version: 1, type: "closeStory" }));
+  document.getElementById("story-prev").addEventListener("click", () => moveStory(-1));
+  document.getElementById("story-next").addEventListener("click", () => moveStory(1));
+  document.getElementById("story-media").addEventListener("click", (event) => {
+    if (!state.storyViewer || event.target instanceof HTMLVideoElement) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    moveStory(event.clientX - rect.left < rect.width / 2 ? -1 : 1);
+  });
+  document.getElementById("story-reply-text").addEventListener("focus", () => { storyPaused = true; window.clearTimeout(storyTimer); });
+  document.getElementById("story-reply-text").addEventListener("blur", () => { storyPaused = false; armStoryTimer(); });
+  document.getElementById("story-reply").addEventListener("submit", (event) => {
+    event.preventDefault();
+    const input = document.getElementById("story-reply-text");
+    const text = input instanceof HTMLInputElement ? input.value.trim() : "";
+    const current = storyPlaylist().find((story) => state.storyViewer && story.id === state.storyViewer.storyId);
+    if (!text || !current || current.mine) return;
+    vscode.postMessage({ version: 1, type: "replyToStory", ownerId: current.ownerId, storyId: current.id, text: text });
+    if (input instanceof HTMLInputElement) input.value = "";
+  });
+  document.getElementById("story-viewers-btn").addEventListener("click", () => {
+    const list = document.getElementById("story-viewer-list");
+    if (list) list.hidden = !list.hidden;
+    if (state.storyViewer) vscode.postMessage({ version: 1, type: "loadStoryViewers", storyId: state.storyViewer.storyId });
+  });
+  document.getElementById("story-delete").addEventListener("click", () => {
+    if (!state.storyViewer) return;
+    const storyId = state.storyViewer.storyId;
+    ask("Delete this story? People will no longer be able to view it.", "Delete", () => vscode.postMessage({ version: 1, type: "deleteStory", storyId: storyId }), "Delete this story?");
+  });
+  document.getElementById("search-input").addEventListener("input", (event) => {
+    const value = event.target instanceof HTMLInputElement ? event.target.value : "";
+    window.clearTimeout(libraryQueryTimer);
+    libraryQueryTimer = window.setTimeout(() => {
+      libraryQuery = value;
+      searchIndex = 0;
+      paintLibrary();
+    }, 250);
+  });
+  document.getElementById("search-clear").addEventListener("click", () => {
+    libraryQuery = "";
+    searchIndex = 0;
+    const input = document.getElementById("search-input");
+    if (input instanceof HTMLInputElement) {
+      input.value = "";
+      input.focus();
+    }
+    paintLibrary();
+  });
+  document.getElementById("search-prev").addEventListener("click", () => moveSearch(-1));
+  document.getElementById("search-next").addEventListener("click", () => moveSearch(1));
   document.getElementById("login-form").addEventListener("submit", (e) => { e.preventDefault(); const d = new FormData(e.target); vscode.postMessage({ version: 1, type: "login", usernameOrEmail: String(d.get("usernameOrEmail")||""), password: String(d.get("password")||"") }); });
   document.getElementById("signup-form").addEventListener("submit", (e) => { e.preventDefault(); const d = new FormData(e.target); vscode.postMessage({ version: 1, type: "signup", username: String(d.get("username")||""), email: String(d.get("email")||""), displayName: String(d.get("displayName")||""), password: String(d.get("password")||"") }); });
   document.getElementById("forgot-form").addEventListener("submit", (e) => { e.preventDefault(); const d = new FormData(e.target); vscode.postMessage({ version: 1, type: "forgotPassword", email: String(d.get("email")||"") }); });
@@ -1784,7 +2358,36 @@ export function renderWebview(webview: Webview, state: HostState): string {
   document.getElementById("dialog-cancel").addEventListener("click", () => { closeDialog(); apply(state); });
   document.getElementById("dialog-ok").addEventListener("click", () => { const action = dialogAction; closeDialog(); if (action) action(); });
   document.addEventListener("keydown", (event) => {
+    const storyOpen = state.storyViewer && document.getElementById("story-viewer") && !document.getElementById("story-viewer").hidden;
+    const typingReply = event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement;
+    if (storyOpen && !typingReply && (event.key === "ArrowRight" || event.key === "ArrowLeft")) {
+      event.preventDefault();
+      moveStory(event.key === "ArrowRight" ? 1 : -1);
+      return;
+    }
+    if (threadMenuOpen && (event.key === "ArrowDown" || event.key === "ArrowUp" || event.key === "Home" || event.key === "End")) {
+      const items = Array.prototype.slice.call(document.querySelectorAll("#thread-menu-pop [role='menuitem']"));
+      if (!items.length) return;
+      event.preventDefault();
+      const current = items.indexOf(document.activeElement);
+      const next = event.key === "Home" ? 0
+        : event.key === "End" ? items.length - 1
+          : event.key === "ArrowDown" ? (current < 0 ? 0 : (current + 1) % items.length)
+            : (current <= 0 ? items.length - 1 : current - 1);
+      if (items[next]) items[next].focus();
+      return;
+    }
     if (event.key !== "Escape") return;
+    const storyViewer = document.getElementById("story-viewer");
+    const storyComposer = document.getElementById("story-composer");
+    if (storyViewer && !storyViewer.hidden) {
+      vscode.postMessage({ version: 1, type: "closeStory" });
+      return;
+    }
+    if (storyComposer && !storyComposer.hidden) {
+      storyComposer.hidden = true;
+      return;
+    }
     if (emojiTarget) {
       closeEmojiPicker();
       reactFor = "";
@@ -1805,6 +2408,9 @@ export function renderWebview(webview: Webview, state: HostState): string {
       threadMenuOpen = false;
       apply(state);
       return;
+    }
+    if ((state.threadPane || "chat") !== "chat" && state.screen === "messages") {
+      vscode.postMessage({ version: 1, type: "closeLibrary" });
     }
     if (!document.getElementById("dialog").hidden) closeDialog();
   });
@@ -2093,5 +2699,24 @@ export function createStateMessage(state: HostState): HostMessage {
     historyError: state.historyError ?? null,
     keyRecovery: state.keyRecovery || "ready",
     historyClearedAt: { ...(state.historyClearedAt || {}) },
+    threadPane: state.threadPane || "chat",
+    libraryConversationId: state.libraryConversationId ?? null,
+    libraryLoading: state.libraryLoading === true,
+    libraryError: state.libraryError ?? null,
+    libraryComplete: state.libraryComplete !== false,
+    highlightMessageId: state.highlightMessageId ?? null,
+    storiesLoading: state.storiesLoading === true,
+    storiesError: state.storiesError ?? null,
+    storyTray: {
+      mine: [...(state.storyTray?.mine || [])],
+      rings: (state.storyTray?.rings || []).map((ring) => ({ ...ring, stories: [...ring.stories] })),
+    },
+    storyViewer: state.storyViewer ?? null,
+    storyStage: state.storyStage ?? null,
+    storyViewers: [...(state.storyViewers || [])],
+    library: (state.library || []).map((entry) => ({
+      ...entry,
+      files: entry.files.map((file) => ({ ...file })),
+    })),
   };
 }

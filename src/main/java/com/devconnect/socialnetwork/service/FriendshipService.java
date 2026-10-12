@@ -136,6 +136,27 @@ public class FriendshipService {
         return friends;
     }
 
+    public List<String> visibleFriendIds(String userId, int limit) {
+        Set<String> hidden = hiddenIds(userId);
+        int bounded = Math.min(Math.max(limit, 1), 100);
+        Query query = Query.query(new Criteria().orOperator(
+                Criteria.where("userAId").is(userId),
+                Criteria.where("userBId").is(userId)
+        ));
+        query.limit(bounded + hidden.size());
+        List<String> ids = new ArrayList<>();
+        for (RelationshipEntity relationship : mongoTemplate.find(query, RelationshipEntity.class)) {
+            String other = relationship.getUserAId().equals(userId) ? relationship.getUserBId() : relationship.getUserAId();
+            if (!hidden.contains(other)) {
+                ids.add(other);
+            }
+            if (ids.size() >= bounded) {
+                break;
+            }
+        }
+        return ids;
+    }
+
     public void deleteAllForUser(String userId) {
         relationshipRepository.deleteAll(relationshipRepository.findByUserAIdOrUserBId(userId, userId));
     }
