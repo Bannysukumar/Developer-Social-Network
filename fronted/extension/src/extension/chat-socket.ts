@@ -208,7 +208,9 @@ export class NodeChatSocket implements ChatSocket {
         }
         this.token = token;
         this.openSocket(true);
-      }).catch(() => this.loseAuth());
+      }).catch(() => {
+        if (!this.stopped) this.schedule();
+      });
     });
     socket.on("error", () => {
       socket.close();

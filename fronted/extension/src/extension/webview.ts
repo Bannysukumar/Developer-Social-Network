@@ -728,7 +728,7 @@ export function renderWebview(webview: Webview, state: HostState): string {
         <button class="btn quiet" type="button" data-settings="menu">Settings</button>
         <h1>About</h1>
         <p>DevConnect</p>
-        <p class="muted" id="about-version">Version 0.4.53</p>
+        <p class="muted" id="about-version">Version 0.4.54</p>
         <p class="muted">A developer network inside Visual Studio Code. Messages stay encrypted on your devices.</p>
       </div>
     </section>
@@ -1026,8 +1026,11 @@ export function renderWebview(webview: Webview, state: HostState): string {
     messageBadge.hidden = !(state.unreadMessages > 0);
     messageBadge.textContent = countText(state.unreadMessages || 0);
     const live = document.getElementById("live-status");
-    live.hidden = state.connection !== "reconnecting" && state.connection !== "connecting";
-    live.textContent = state.connection === "reconnecting" ? "Reconnecting…" : "Connecting…";
+    const offline = state.authenticated && state.connection === "offline";
+    live.hidden = !offline && state.connection !== "reconnecting" && state.connection !== "connecting";
+    live.textContent = offline
+      ? "Offline. Pending messages stay in this chat and send when you reconnect."
+      : state.connection === "reconnecting" ? "Reconnecting…" : "Connecting…";
     const toast = document.getElementById("toast");
     if (state.toast && state.toastSeq !== toastSeq) {
       toastSeq = state.toastSeq;
@@ -1174,14 +1177,17 @@ export function renderWebview(webview: Webview, state: HostState): string {
       const deleted = !!m.deletedForEveryone;
       const receipt = !mine ? "" : failed
         ? '<span class="receipt fail" role="img" aria-label="Failed to send">!</span>'
-        : m.sendState === "sending"
+        : m.sendState === "pending"
+          ? '<span class="receipt" role="img" aria-label="Waiting to send">○</span>'
+          : m.sendState === "sending"
           ? '<span class="receipt" role="img" aria-label="Sending">○</span>'
           : m.status === "READ"
             ? '<span class="receipt read" role="img" aria-label="Read">✓✓</span>'
             : m.status === "DELIVERED"
               ? '<span class="receipt" role="img" aria-label="Delivered">✓✓</span>'
               : '<span class="receipt" role="img" aria-label="Sent">✓</span>';
-      const retry = failed ? '<button class="btn" type="button" data-act="retry-message" data-text="' + esc(m.displayText) + '">Retry</button>' : "";
+      const clientMessageId = String(m.id || "").indexOf("local-") === 0 ? String(m.id).slice(6) : "";
+      const retry = failed && clientMessageId ? '<button class="btn" type="button" data-act="retry-outbox" data-id="' + esc(clientMessageId) + '">Retry</button>' : "";
       const actions = m.id && String(m.id).indexOf("local-") !== 0
         ? '<button class="btn quiet icon-btn" type="button" data-act="message-menu" data-id="' + esc(m.id) + '" aria-label="Message actions">⋯</button>'
         : "";
@@ -1245,7 +1251,7 @@ export function renderWebview(webview: Webview, state: HostState): string {
         ? '<div class="react-bar" role="toolbar" aria-label="Quick reactions">' + quickReactions.map((emoji) => '<button class="btn' + ((groups[emoji] || []).indexOf(selfId) >= 0 ? " mine" : "") + '" type="button" data-act="react" data-id="' + esc(m.id) + '" data-emoji="' + esc(emoji) + '" aria-label="React with ' + esc(emoji) + '">' + emoji + '</button>').join("") + '<button class="btn" type="button" data-act="emoji-picker" data-id="' + esc(m.id) + '" aria-label="More emoji">☺</button></div>'
         : "";
       const media = !deleted && ((m.attachments || []).length || m.media) ? " media" : "";
-      return separator + '<div class="msg ' + (mine ? "mine" : "theirs") + (failed ? " failed" : "") + (deleted ? " deleted" : "") + (m.sealed ? " sealed" : "") + (reactFor === m.id ? " react-open" : "") + media + '">' + reactBar + (deleted ? "" : visual + files) + shownBody + (reactButtons ? '<div class="react-row">' + reactButtons + '</div>' : "") + '<div class="msg-meta">' + esc(clock(m.createdAt)) + receipt + actions + '</div>' + menu + (failed ? '<div class="msg-meta">' + esc(m.sendError || "Message failed to send.") + '</div>' + retryFiles : "") + '</div>';
+      return separator + '<div class="msg ' + (mine ? "mine" : "theirs") + (failed ? " failed" : "") + (deleted ? " deleted" : "") + (m.sealed ? " sealed" : "") + (reactFor === m.id ? " react-open" : "") + media + '">' + reactBar + (deleted ? "" : visual + files) + shownBody + (reactButtons ? '<div class="react-row">' + reactButtons + '</div>' : "") + '<div class="msg-meta">' + esc(clock(m.createdAt)) + receipt + actions + '</div>' + menu + (failed ? '<div class="msg-meta">' + esc(m.sendError || "Message failed to send.") + '</div>' + retry + retryFiles : "") + '</div>';
       } catch (ignored) {
         return '<div class="msg">' + esc(m && m.displayText ? m.displayText : "Message") + '</div>';
       }
@@ -1609,6 +1615,10 @@ export function renderWebview(webview: Webview, state: HostState): string {
     }
     if (act === "retry-files") {
       vscode.postMessage({ version: 1, type: "retryFiles", localId: target.getAttribute("data-id") || "" });
+      return;
+    }
+    if (act === "retry-outbox") {
+      vscode.postMessage({ version: 1, type: "retryOutbox", clientMessageId: id });
       return;
     }
     if (act === "retry-message") {

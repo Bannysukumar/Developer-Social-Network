@@ -8,7 +8,10 @@ import { applyUserReaction } from "./reaction-state";
 import { mergePresence } from "./presence-state";
 import { absorbServerNotifications, acceptLiveToast, applyNotificationRead, applyTombstone, mergeHistory, mergeLiveMessage, mergeNotification, mergeReceipt, unreadMessageNotificationsForConversation } from "./realtime-state";
 import { isRiskyFile } from "./crypto/file-payload";
+import { encodeMediaPayload } from "./crypto/media-payload";
 import { emptyHostState, type HostState } from "./webview";
+import { MemoryChatCache, type ChatCache } from "./chat-cache";
+import { createClientMessageId, isPermanentDeliveryError, MemoryOutbox, nextAttemptDelay, type OutboxRecord, type OutboxStore } from "./outbox";
 
 export class SessionFlow {
   private phase: HostState["phase"] = "checking";
@@ -70,13 +73,17 @@ export class SessionFlow {
   private imageErrorText = new Map<string, string>();
   private imageFlight = new Map<string, number>();
   private imageEpoch = new Map<string, number>();
-  private pendingFiles = new Map<string, { conversationId: string; text: string; clientMessageId: string; files: { name: string; mime: string; bytes: Buffer }[] }>();
   private blockEpoch = new Map<string, number>();
+  private flushTimer: ReturnType<typeof setTimeout> | undefined;
+  private flushing = false;
+  private readonly delivering = new Set<string>();
   constructor(
     private readonly auth: AuthService,
     private readonly onChange: () => void,
     private readonly saveFile: (name: string, bytes: Uint8Array) => Promise<void> = async () => undefined,
     private readonly log: (line: string) => void = () => undefined,
+    private readonly outbox: OutboxStore = new MemoryOutbox(),
+    private readonly chatCache: ChatCache = new MemoryChatCache(),
   ) {}
 
   reloadConfig(config: ApiConfig): void {
@@ -116,6 +123,7 @@ export class SessionFlow {
     this.messageHasMore = opened.hasNext;
     this.historyLoading = false;
     this.historyError = null;
+    this.mergePending(opened.conversation.id);
   }
 
   private rememberConversation(conversation: HostState["conversations"][number]): void {
@@ -287,6 +295,7 @@ export class SessionFlow {
 
   private pushState(): void {
     this.rememberHistoryCache();
+    this.persistChatCache();
     this.onChange();
     this.scheduleImages();
   }
@@ -295,6 +304,15 @@ export class SessionFlow {
     const previous = this.connection;
     if (previous === status && !recovered) return;
     this.connection = status;
+    if (status === "connected") {
+      const accountId = this.auth.getUser()?.id;
+      if (accountId) {
+        for (const item of this.outbox.list(accountId)) {
+          if (!item.permanent) this.outbox.save({ ...item, nextAttemptAt: 0 });
+        }
+      }
+      this.armFlush(0);
+    }
     if (status === "connected" && recovered && previous !== "connected") {
       this.toast = "Connection restored";
       this.toastSeq += 1;
@@ -518,7 +536,6 @@ export class SessionFlow {
     this.imageErrorText.clear();
     this.imageFlight.clear();
     this.imageEpoch.clear();
-    this.pendingFiles.clear();
     this.messageLock = "none";
   }
 
@@ -540,18 +557,256 @@ export class SessionFlow {
       await this.loadShell();
       this.phase = "ready";
       await this.restoreRoute();
+      this.armFlush(0);
     } catch (error) {
       if (isAuthenticationFailure(error) || !this.auth.isAuthenticated()) {
         await this.auth.invalidateSession();
         this.enterLogin();
         return;
       }
-      this.phase = "checking";
-      this.screen = "splash";
-      this.error = this.auth.userFacingError(error);
+      this.restoreOfflineShell();
     } finally {
       this.pushState();
     }
+  }
+
+  private restoreOfflineShell(): void {
+    const accountId = this.auth.getUser()?.id;
+    this.phase = "ready";
+    this.connection = "offline";
+    this.error = null;
+    if (accountId) {
+      const snapshot = this.chatCache.load(accountId);
+      if (snapshot) {
+        this.conversations = [...snapshot.conversations];
+        for (const [id, thread] of Object.entries(snapshot.threads)) {
+          this.historyCache.set(id, { messages: [...thread.messages], cursor: thread.cursor, hasMore: thread.hasMore });
+        }
+      }
+    }
+    const route = this.auth.lastRoute();
+    const screen = route?.screen;
+    if (screen === "messages" && route?.conversationId) {
+      const cached = this.historyCache.get(route.conversationId);
+      this.activeConversationId = route.conversationId;
+      this.messages = cached ? [...cached.messages] : [];
+      this.messageCursor = cached?.cursor ?? null;
+      this.messageHasMore = cached?.hasMore ?? false;
+      this.mergePending(route.conversationId);
+      this.show("messages", false);
+      return;
+    }
+    if (screen === "search" || screen === "friends" || screen === "messages" || screen === "notifications" || screen === "profile" || screen === "settings" || screen === "home") {
+      this.show(screen, false);
+      return;
+    }
+    this.show("home", false);
+  }
+
+  private persistChatCache(): void {
+    const accountId = this.auth.getUser()?.id;
+    if (!accountId || this.phase !== "ready") return;
+    const threads: Record<string, { messages: HostState["messages"]; cursor: string | null; hasMore: boolean }> = {};
+    for (const [id, thread] of this.historyCache) {
+      threads[id] = { messages: thread.messages, cursor: thread.cursor, hasMore: thread.hasMore };
+    }
+    try {
+      this.chatCache.save(accountId, { conversations: this.conversations, threads });
+    } catch (error) {
+      this.log(`chat cache skipped: ${error instanceof Error ? error.name : "error"}`);
+    }
+  }
+
+  private localId(clientMessageId: string): string {
+    return `local-${clientMessageId}`;
+  }
+
+  private mergePending(conversationId: string): void {
+    const accountId = this.auth.getUser()?.id;
+    if (!accountId) return;
+    for (const item of this.outbox.list(accountId)) {
+      if (item.conversationId !== conversationId) continue;
+      const localId = this.localId(item.clientMessageId);
+      if (this.messages.some((message) => message.id === localId)) continue;
+      this.messages = [this.localMessage(item), ...this.messages];
+    }
+  }
+
+  private localMessage(item: OutboxRecord): HostState["messages"][number] {
+    const files = item.files?.map((file, index) => {
+      const bytes = this.outbox.readFile(item.accountId, file.relativePath);
+      return {
+        id: `${this.localId(item.clientMessageId)}-${index}`,
+        name: file.name,
+        size: bytes?.byteLength ?? 0,
+        mime: file.mime,
+        key: "",
+        iv: "",
+        preview: bytes && file.mime.startsWith("image/") && bytes.byteLength <= 8_000_000
+          ? `data:${file.mime};base64,${Buffer.from(bytes).toString("base64")}`
+          : undefined,
+      };
+    });
+    return {
+      id: this.localId(item.clientMessageId),
+      conversationId: item.conversationId,
+      senderId: item.accountId,
+      recipientId: this.peerId() ?? "peer",
+      ciphertext: "",
+      messageType: item.messageType ?? "TEXT",
+      status: "SENT",
+      createdAt: item.createdAt,
+      displayText: item.displayText,
+      sendState: item.permanent ? "failed" : item.attempts > 0 ? "pending" : "sending",
+      sendError: item.error,
+      media: item.media,
+      attachments: files,
+    };
+  }
+
+  private showQueued(item: OutboxRecord, sendState: "sending" | "pending" | "failed"): void {
+    const localId = this.localId(item.clientMessageId);
+    const next = { ...this.localMessage(item), sendState, sendError: item.error };
+    const place = (messages: HostState["messages"]): HostState["messages"] => messages.some((message) => message.id === localId)
+      ? messages.map((message) => message.id === localId ? next : message)
+      : [next, ...messages];
+    if (this.activeConversationId === item.conversationId) {
+      this.messages = place(this.messages);
+      return;
+    }
+    const cached = this.historyCache.get(item.conversationId);
+    this.historyCache.set(item.conversationId, {
+      messages: place(cached?.messages ?? []),
+      cursor: cached?.cursor ?? null,
+      hasMore: cached?.hasMore ?? false,
+    });
+  }
+
+  private async enqueue(record: OutboxRecord): Promise<void> {
+    this.outbox.save(record);
+    this.showQueued(record, "sending");
+    this.pushState();
+    await this.attemptDelivery(record);
+  }
+
+  private async retryQueued(clientMessageId: string): Promise<void> {
+    const accountId = this.auth.getUser()?.id;
+    if (!accountId) return;
+    const item = this.outbox.list(accountId).find((entry) => entry.clientMessageId === clientMessageId);
+    if (!item) return;
+    const next = { ...item, permanent: false, attempts: 0, nextAttemptAt: 0, error: undefined };
+    this.outbox.save(next);
+    this.showQueued(next, "sending");
+    this.pushState();
+    await this.attemptDelivery(next);
+  }
+
+  private armFlush(delayMs: number): void {
+    if (this.flushTimer) clearTimeout(this.flushTimer);
+    this.flushTimer = setTimeout(() => {
+      this.flushTimer = undefined;
+      void this.flushOutbox();
+    }, Math.max(0, delayMs));
+  }
+
+  private async flushOutbox(): Promise<void> {
+    if (this.flushing) return;
+    const accountId = this.auth.getUser()?.id;
+    if (!accountId || !this.auth.isAuthenticated()) return;
+    this.flushing = true;
+    try {
+      const now = Date.now();
+      const due = this.outbox.list(accountId)
+        .filter((item) => !item.permanent && item.nextAttemptAt <= now)
+        .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.clientMessageId.localeCompare(right.clientMessageId));
+      for (const item of due) {
+        if (this.auth.getUser()?.id !== accountId) break;
+        await this.attemptDelivery(item);
+      }
+    } finally {
+      this.flushing = false;
+    }
+    const account = this.auth.getUser()?.id;
+    if (!account || !this.auth.isAuthenticated()) return;
+    const waiting = this.outbox.list(account).filter((item) => !item.permanent);
+    if (waiting.length === 0) return;
+    const next = Math.min(...waiting.map((item) => item.nextAttemptAt));
+    this.armFlush(Math.max(0, next - Date.now()));
+  }
+
+  private async attemptDelivery(item: OutboxRecord): Promise<void> {
+    const key = `${item.accountId}:${item.clientMessageId}`;
+    if (this.delivering.has(key) || item.permanent) return;
+    if (this.auth.getUser()?.id !== item.accountId) return;
+    this.delivering.add(key);
+    let current = item;
+    try {
+      if (current.kind === "files") {
+        const files = (current.files ?? []).map((file) => {
+          const bytes = this.outbox.readFile(current.accountId, file.relativePath);
+          return { name: file.name, mime: file.mime, bytes: Buffer.from(bytes ?? new Uint8Array()) };
+        });
+        if (files.length < 1 || files.some((file) => file.bytes.length < 1)) {
+          throw new ApiError("request", "The attachment is no longer available on this device. Choose it again.");
+        }
+        const sent = await this.auth.sendFiles(current.conversationId, current.caption ?? "", files, current.clientMessageId);
+        this.finishQueued(current, sent);
+        return;
+      }
+      if (!current.ciphertext) {
+        const plaintext = current.plaintext ?? (current.media ? encodeMediaPayload(current.media.kind, current.media.id) : "");
+        if (!plaintext) throw new ApiError("request", "This message could not be prepared.");
+        const prepared = await this.auth.preparePlaintext(current.conversationId, plaintext, current.clientMessageId, "TEXT");
+        current = { ...current, ciphertext: prepared.ciphertext, deviceId: prepared.deviceId, keyId: prepared.keyId, messageType: "TEXT", plaintext: undefined };
+        this.outbox.save(current);
+      }
+      if (!current.ciphertext || !current.deviceId || !current.keyId || !current.messageType) {
+        throw new ApiError("request", "This message could not be prepared.");
+      }
+      const sent = await this.auth.deliverPrepared(current.conversationId, {
+        ciphertext: current.ciphertext,
+        messageType: current.messageType,
+        clientMessageId: current.clientMessageId,
+        deviceId: current.deviceId,
+        keyId: current.keyId,
+      });
+      this.finishQueued(current, sent);
+    } catch (error) {
+      const detail = this.auth.userFacingError(error);
+      const permanent = isPermanentDeliveryError(error) || /encryption key|not registered|can't interact|Only friends can exchange messages|Key material is available to friends|Only friends can start a conversation|no longer available/.test(detail);
+      const attempts = current.attempts + 1;
+      const failed = {
+        ...current,
+        attempts,
+        permanent,
+        nextAttemptAt: permanent ? current.nextAttemptAt : Date.now() + nextAttemptDelay(attempts),
+        error: detail,
+      };
+      this.outbox.save(failed);
+      this.showQueued(failed, permanent ? "failed" : "pending");
+      if (permanent && /can't interact|Only friends/.test(detail)) await this.syncMessageLock();
+      this.log(`outbox ${current.clientMessageId} attempt=${attempts} permanent=${permanent}`);
+      this.pushState();
+    } finally {
+      this.delivering.delete(key);
+    }
+  }
+
+  private finishQueued(item: OutboxRecord, sent: HostState["messages"][number]): void {
+    this.outbox.remove(item.accountId, item.clientMessageId);
+    const localId = this.localId(item.clientMessageId);
+    for (const file of sent.attachments ?? []) {
+      if (file.preview) this.rememberImage(file.id, file.preview);
+    }
+    this.seenMessageIds.add(sent.id);
+    const place = (messages: HostState["messages"]): HostState["messages"] => [sent, ...messages.filter((message) => message.id !== sent.id && message.id !== localId)];
+    if (this.activeConversationId === item.conversationId) this.messages = place(this.messages);
+    const cached = this.historyCache.get(item.conversationId);
+    if (cached) {
+      this.historyCache.set(item.conversationId, { ...cached, messages: place(cached.messages) });
+    }
+    this.rememberPreview(item.conversationId, sent.displayText);
+    this.pushState();
   }
 
   private async restoreRoute(): Promise<void> {
@@ -856,6 +1111,7 @@ export class SessionFlow {
           this.show("home", false);
           this.notice = "Signed in.";
           await this.loadShell();
+          this.armFlush(0);
           break;
         case "signup":
           await this.auth.signup({
@@ -868,6 +1124,7 @@ export class SessionFlow {
           this.show("home", false);
           this.notice = "Account created.";
           await this.loadShell();
+          this.armFlush(0);
           break;
         case "forgotPassword":
           await this.auth.forgotPassword(message.email);
@@ -1000,30 +1257,22 @@ export class SessionFlow {
             this.error = this.messageLock === "blocked-by-me" ? "You blocked this user." : "You can't message this user.";
             break;
           }
-          const localId = `local-${Date.now()}`;
+          const accountId = this.auth.getUser()?.id;
+          if (!accountId) break;
           const label = message.kind === "sticker" ? "Sticker" : "GIF";
-          this.messages = [{
-            id: localId,
+          await this.enqueue({
+            accountId,
             conversationId: message.conversationId,
-            senderId: this.auth.getUser()?.id ?? "me",
-            recipientId: this.peerId() ?? "peer",
-            ciphertext: "",
-            messageType: "TEXT",
-            status: "SENT",
+            clientMessageId: createClientMessageId(),
+            kind: "media",
+            createdAt: new Date().toISOString(),
+            attempts: 0,
+            nextAttemptAt: 0,
+            permanent: false,
             displayText: label,
             media: { kind: message.kind, id: message.id },
-            sendState: "sending",
-          }, ...this.messages];
-          this.pushState();
-          try {
-            const sent = await this.auth.sendMedia(message.conversationId, message.kind, message.id);
-            this.seenMessageIds.add(sent.id);
-            this.messages = [sent, ...this.messages.filter((item) => item.id !== sent.id && item.id !== localId)];
-            this.rememberPreview(message.conversationId, sent.displayText);
-          } catch (error) {
-            this.messages = this.messages.filter((item) => item.id !== localId);
-            this.error = this.auth.userFacingError(error);
-          }
+            messageType: "TEXT",
+          });
           break;
         }
         case "setReaction":
@@ -1051,6 +1300,10 @@ export class SessionFlow {
           }
           break;
         }
+        case "retryOutbox": {
+          await this.retryQueued(message.clientMessageId);
+          break;
+        }
         case "sendMessage": {
           if (this.messageLock !== "none") {
             this.error = this.messageLock === "blocked-by-me"
@@ -1058,116 +1311,66 @@ export class SessionFlow {
               : "You can't message this user.";
             break;
           }
-          const localId = `local-${Date.now()}`;
-          this.messages = [{
-            id: localId,
+          const accountId = this.auth.getUser()?.id;
+          if (!accountId) break;
+          await this.enqueue({
+            accountId,
             conversationId: message.conversationId,
-            senderId: this.auth.getUser()?.id ?? "me",
-            recipientId: this.peerId() ?? "peer",
-            ciphertext: "",
-            messageType: "TEXT",
-            status: "SENT",
+            clientMessageId: createClientMessageId(),
+            kind: "text",
+            createdAt: new Date().toISOString(),
+            attempts: 0,
+            nextAttemptAt: 0,
+            permanent: false,
             displayText: message.text,
-            sendState: "sending",
-          }, ...this.messages.filter((item) => !(item.id.startsWith("local-") && item.displayText === message.text))];
-          this.pushState();
-          try {
-            const sent = await this.auth.sendMessage(message.conversationId, message.text);
-            this.seenMessageIds.add(sent.id);
-            this.messages = [sent, ...this.messages.filter((item) => item.id !== sent.id && item.id !== localId)];
-            this.rememberPreview(message.conversationId, sent.displayText);
-            this.activeConversationId = message.conversationId;
-          } catch (error) {
-            const text = this.auth.userFacingError(error);
-            if (/encryption key|not registered/.test(text)) {
-              this.messages = this.messages.filter((item) => item.id !== localId);
-              this.error = text;
-              break;
-            }
-            if (/can't interact|Only friends can exchange messages|Key material is available to friends|Only friends can start a conversation/.test(text)) {
-              this.messages = this.messages.filter((item) => item.id !== localId);
-              const lock = await this.syncMessageLock();
-              this.error = lock === "blocked-me" ? "You can't message this user." : text;
-              break;
-            }
-            this.messages = [{
-              id: `local-${Date.now()}`,
-              conversationId: message.conversationId,
-              senderId: this.auth.getUser()?.id ?? "me",
-              recipientId: this.peerId() ?? "peer",
-              ciphertext: "",
-              messageType: "TEXT",
-              status: "SENT",
-              displayText: message.text,
-              sendState: "failed",
-            }, ...this.messages.filter((item) => !(item.id.startsWith("local-") && item.displayText === message.text))];
-          }
+            plaintext: message.text,
+            messageType: "TEXT",
+          });
+          this.activeConversationId = message.conversationId;
           break;
         }
         case "sendFiles":
         case "retryFiles": {
-          const pending = message.type === "retryFiles" ? this.pendingFiles.get(message.localId) : undefined;
-          const conversationId = message.type === "sendFiles" ? message.conversationId : pending?.conversationId;
-          const text = message.type === "sendFiles" ? (message.text ?? "") : (pending?.text ?? "");
-          const files = message.type === "sendFiles"
-            ? message.files.map((file) => ({ name: file.name, mime: file.mime, bytes: Buffer.from(file.base64, "base64") }))
-            : pending?.files;
-          const clientMessageId = pending?.clientMessageId ?? `ext-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-          if (!conversationId || !files || files.length < 1) break;
+          if (message.type === "retryFiles") {
+            const clientMessageId = message.localId.startsWith("local-") ? message.localId.slice("local-".length) : message.localId;
+            await this.retryQueued(clientMessageId);
+            break;
+          }
+          const accountId = this.auth.getUser()?.id;
+          if (!accountId) break;
+          const text = message.text ?? "";
+          const files = message.files.map((file) => ({ name: file.name, mime: file.mime, bytes: Buffer.from(file.base64, "base64") }));
+          if (files.length < 1) break;
           if (this.messageLock !== "none") {
             this.error = this.messageLock === "blocked-by-me" ? "You blocked this user." : "You can't message this user.";
             break;
           }
-          if (files.some((file) => isRiskyFile(file.name)) && message.type === "sendFiles" && !message.confirmedRisky) {
+          if (files.some((file) => isRiskyFile(file.name)) && !message.confirmedRisky) {
             this.error = "That file type needs confirmation before it can be sent.";
             break;
           }
-          const localId = message.type === "retryFiles" ? message.localId : `local-${Date.now()}`;
-          this.pendingFiles.set(localId, { conversationId, text, clientMessageId, files });
+          const clientMessageId = createClientMessageId();
+          const stored = files.map((file, index) => ({
+            name: file.name,
+            mime: file.mime,
+            relativePath: this.outbox.writeFile(accountId, clientMessageId, index, file.bytes),
+          }));
           const label = text.trim() || files.map((file) => file.name).join(", ");
-          this.messages = [{
-            id: localId,
-            conversationId,
-            senderId: this.auth.getUser()?.id ?? "me",
-            recipientId: this.peerId() ?? "peer",
-            ciphertext: "",
-            messageType: "FILE",
-            status: "SENT",
+          await this.enqueue({
+            accountId,
+            conversationId: message.conversationId,
+            clientMessageId,
+            kind: "files",
+            createdAt: new Date().toISOString(),
+            attempts: 0,
+            nextAttemptAt: 0,
+            permanent: false,
             displayText: label,
-            sendState: "sending",
-            attachments: files.map((file, index) => ({
-              id: `${localId}-${index}`,
-              name: file.name,
-              size: file.bytes.length,
-              mime: file.mime,
-              key: "",
-              iv: "",
-              preview: file.mime.startsWith("image/") && file.bytes.length <= 8_000_000
-                ? `data:${file.mime};base64,${file.bytes.toString("base64")}`
-                : undefined,
-            })),
-          }, ...this.messages.filter((item) => item.id !== localId)];
-          this.pushState();
-          try {
-            const sent = await this.auth.sendFiles(conversationId, text, files, clientMessageId);
-            this.pendingFiles.delete(localId);
-            for (const file of sent.attachments ?? []) {
-              if (file.preview) this.rememberImage(file.id, file.preview);
-            }
-            this.seenMessageIds.add(sent.id);
-            this.messages = [sent, ...this.messages.filter((item) => item.id !== sent.id && item.id !== localId)];
-            this.rememberPreview(conversationId, sent.displayText);
-            this.activeConversationId = conversationId;
-          } catch (error) {
-            const detail = this.auth.userFacingError(error);
-            if (/can't interact|Only friends can exchange messages|Key material is available to friends|encryption key|not registered/.test(detail)) {
-              this.pendingFiles.delete(localId);
-              this.messages = this.messages.filter((item) => item.id !== localId);
-              this.error = detail;
-              break;
-            }
-            this.messages = this.messages.map((item) => item.id === localId ? { ...item, sendState: "failed" as const, sendError: detail } : item);
-          }
+            caption: text,
+            messageType: files.every((file) => file.mime.startsWith("image/")) ? "IMAGE" : "FILE",
+            files: stored,
+          });
+          this.activeConversationId = message.conversationId;
           break;
         }
         case "downloadFile": {

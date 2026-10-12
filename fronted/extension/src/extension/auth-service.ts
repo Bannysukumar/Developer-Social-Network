@@ -4,7 +4,7 @@ import { ApiClient } from "../api/client";
 import type { ApiConfig } from "../api/config";
 import { ConversationsApi } from "../api/conversations";
 import { DevicesApi } from "../api/devices";
-import { ApiError } from "../api/errors";
+import { ApiError, isAuthenticationFailure } from "../api/errors";
 import { FriendsApi } from "../api/friends";
 import { KeysApi } from "../api/keys";
 import { NotificationsApi } from "../api/notifications";
@@ -35,7 +35,7 @@ import { SessionStore } from "./session";
 
 export interface DisplayMessage extends MessageDto {
   readonly displayText: string;
-  readonly sendState?: "failed" | "sending";
+  readonly sendState?: "failed" | "sending" | "pending";
   readonly sendError?: string;
   readonly attachments?: readonly SharedFile[];
   readonly media?: MediaPayload;
@@ -100,7 +100,13 @@ export class AuthService {
     if (!token) return undefined;
     const expiresMs = expiresAt ? Date.parse(expiresAt) : Number.NaN;
     if (!Number.isNaN(expiresMs) && expiresMs - Date.now() < 60_000) {
-      return this.refreshAccessToken();
+      try {
+        const refreshed = await this.refreshAccessToken();
+        if (refreshed) return refreshed;
+        return this.isAuthenticated() ? token : undefined;
+      } catch {
+        return this.isAuthenticated() ? token : undefined;
+      }
     }
     return token;
   }
@@ -440,7 +446,12 @@ export class AuthService {
     }
   }
 
-  async sendMessage(conversationId: string, text: string): Promise<DisplayMessage> {
+  async preparePlaintext(
+    conversationId: string,
+    plaintext: string,
+    clientMessageId: string,
+    messageType: "TEXT" | "IMAGE" | "FILE" = "TEXT",
+  ): Promise<{ ciphertext: string; messageType: "TEXT" | "IMAGE" | "FILE"; clientMessageId: string; deviceId: string; keyId: string }> {
     await this.ensureDeviceKeys();
     const keys = this.deviceKeys;
     if (!keys?.deviceId) {
@@ -454,14 +465,33 @@ export class AuthService {
     }
     const bundle = await this.keysApi.bundle(recipientId);
     const recipients = this.pickRecipients(bundle.devices);
-    const message = await this.conversationsApi.sendMessage(conversationId, {
-      ciphertext: encryptForDevices(text, conversationId, keys, recipients),
-      messageType: "TEXT",
-      clientMessageId: `ext-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+    return {
+      ciphertext: encryptForDevices(plaintext, conversationId, keys, recipients),
+      messageType,
+      clientMessageId,
       deviceId: keys.deviceId,
       keyId: String(recipients[0]?.oneTimePreKey?.preKeyId ?? recipients[0]?.signedPreKey.preKeyId ?? ""),
+    };
+  }
+
+  async deliverPrepared(
+    conversationId: string,
+    prepared: { ciphertext: string; messageType: "TEXT" | "IMAGE" | "FILE"; clientMessageId: string; deviceId: string; keyId: string; attachmentIds?: readonly string[] },
+  ): Promise<DisplayMessage> {
+    const message = await this.conversationsApi.sendMessage(conversationId, {
+      ciphertext: prepared.ciphertext,
+      messageType: prepared.messageType,
+      clientMessageId: prepared.clientMessageId,
+      deviceId: prepared.deviceId,
+      keyId: prepared.keyId,
+      attachmentIds: prepared.attachmentIds ? [...prepared.attachmentIds] : undefined,
     });
     return this.displayMessage(message);
+  }
+
+  async sendMessage(conversationId: string, text: string, clientMessageId = `ext-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`): Promise<DisplayMessage> {
+    const prepared = await this.preparePlaintext(conversationId, text, clientMessageId, "TEXT");
+    return this.deliverPrepared(conversationId, prepared);
   }
 
   async sendMedia(conversationId: string, kind: "sticker" | "gif", id: string): Promise<DisplayMessage> {
@@ -749,9 +779,12 @@ export class AuthService {
       const response = await this.authApi.refresh(refreshToken);
       await this.persist(response);
       return response.accessToken;
-    } catch {
-      await this.session.clear();
-      return undefined;
+    } catch (error) {
+      if (isAuthenticationFailure(error)) {
+        await this.session.clear();
+        return undefined;
+      }
+      throw error;
     }
   }
 

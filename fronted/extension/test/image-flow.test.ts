@@ -290,7 +290,7 @@ describe("inline image messages", () => {
       conversationId: "c1",
       files: [{ name: "photo.png", mime: "image/png", base64: png.toString("base64") }],
     });
-    const failed = flow.snapshot().messages.find((item) => item.sendState === "failed");
+    const failed = flow.snapshot().messages.find((item) => item.sendState === "pending");
     expect(failed?.attachments?.[0]?.preview).toContain("data:image/png;base64,");
     const localId = failed?.id ?? "";
     await flow.handleMessage({ version: 1, type: "retryFiles", localId });

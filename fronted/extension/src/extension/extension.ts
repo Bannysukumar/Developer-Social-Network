@@ -8,6 +8,8 @@ import { chatSocketUrl, messageFromFrame, NodeChatSocket, notificationFromFrame 
 import { decideNotificationNotice, decideStoredNotice, isActivelyReading, noticeChannel, noticeLaunchUri, readingIsForeground, resolveMessageNotice, unreadMessageNotificationId, type NoticeChannel, type NoticePrefs, type NoticeTarget, type ReadingContext } from "./desktop-notice";
 import { shouldUseEditorFallback, showBackgroundNotice, windowsToastScriptPath } from "./os-notice";
 import { SessionFlow } from "./session-flow";
+import { FileChatCache } from "./chat-cache";
+import { FileOutbox } from "./outbox";
 import { createStateMessage, renderWebview } from "./webview";
 
 class DevConnectHost implements vscode.WebviewViewProvider, vscode.Disposable {
@@ -34,6 +36,7 @@ class DevConnectHost implements vscode.WebviewViewProvider, vscode.Disposable {
     private readonly toastScript: string,
     private readonly output: vscode.OutputChannel,
     private readonly globalState: vscode.Memento,
+    localRoot: string,
   ) {
     this.statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 0);
     this.statusBar.command = "devconnect.open";
@@ -48,7 +51,7 @@ class DevConnectHost implements vscode.WebviewViewProvider, vscode.Disposable {
         ?? vscode.Uri.file(process.env.USERPROFILE || process.env.HOME || ".");
       const target = await vscode.window.showSaveDialog({ defaultUri: vscode.Uri.joinPath(base, name), saveLabel: "Save file" });
       if (target) await vscode.workspace.fs.writeFile(target, bytes);
-    }, (line) => this.output.appendLine(line));
+    }, (line) => this.output.appendLine(line), new FileOutbox(join(localRoot, "outbox")), new FileChatCache(join(localRoot, "cache")));
   }
 
   dispose(): void {
@@ -485,7 +488,7 @@ export function activate(context: vscode.ExtensionContext): void {
   }
 
   const output = vscode.window.createOutputChannel("DevConnect");
-  const host = new DevConnectHost(auth, join(context.globalStorageUri.fsPath, "notices"), windowsToastScriptPath(context.extensionUri.fsPath), output, context.globalState);
+  const host = new DevConnectHost(auth, join(context.globalStorageUri.fsPath, "notices"), windowsToastScriptPath(context.extensionUri.fsPath), output, context.globalState, join(context.globalStorageUri.fsPath, "local"));
   context.subscriptions.push(output, vscode.window.registerUriHandler({
     handleUri(uri) {
       host.openFromNotice(uri);

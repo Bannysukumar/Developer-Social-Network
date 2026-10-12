@@ -49,6 +49,7 @@ export const webviewMessageSchema = z.discriminatedUnion("type", [
     newPassword: z.string().min(10).max(128),
   }).strict(),
   z.object({ version: z.literal(1), type: z.literal("logout") }).strict(),
+  z.object({ version: z.literal(1), type: z.literal("retryOutbox"), clientMessageId: z.string().min(8).max(64) }).strict(),
   z.object({ version: z.literal(1), type: z.literal("refreshProfile") }).strict(),
   z.object({ version: z.literal(1), type: z.literal("resendVerification") }).strict(),
   z.object({
@@ -248,7 +249,7 @@ export type WebviewMessage = z.infer<typeof webviewMessageSchema>;
 
 const displayMessageSchema = messageSchema.extend({
   displayText: z.string(),
-  sendState: z.enum(["failed", "sending"]).optional(),
+  sendState: z.enum(["failed", "sending", "pending"]).optional(),
   sendError: z.string().max(200).optional(),
   sealed: z.boolean().optional(),
   attachments: z.array(z.object({

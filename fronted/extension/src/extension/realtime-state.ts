@@ -19,13 +19,13 @@ export function retryDelayMs(attempt: number): number {
   return Math.min(30_000, 1_000 * 2 ** Math.min(step, 5));
 }
 
-type TrackedMessage = MessageDto & { sendState?: "failed" | "sending" };
+type TrackedMessage = MessageDto & { sendState?: "failed" | "sending" | "pending" };
 
 function withoutLocalSending(messages: readonly TrackedMessage[], incoming: MessageDto, selfId: string | null): TrackedMessage[] {
   if (incoming.senderId !== selfId) return [...messages];
-  const localIndex = messages.findIndex((item) => item.id.startsWith("local-") && item.sendState === "sending" && item.conversationId === incoming.conversationId);
-  if (localIndex < 0) return [...messages];
-  return messages.filter((_, index) => index !== localIndex);
+  const locals = messages.filter((item) => item.id.startsWith("local-") && (item.sendState === "sending" || item.sendState === "pending") && item.conversationId === incoming.conversationId);
+  if (locals.length !== 1) return [...messages];
+  return messages.filter((item) => item.id !== locals[0]?.id);
 }
 
 export function mergeLiveMessage(
